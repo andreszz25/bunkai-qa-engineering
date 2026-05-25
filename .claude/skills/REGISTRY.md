@@ -1,6 +1,6 @@
 # Skill Registry (auto-generated)
 
-> Generated: `2026-05-25T13:52:50.722Z`
+> Generated: `2026-05-25T19:36:11.023Z`
 > Generator: `bun scripts/build-skill-registry.ts`
 > Protocol: `.claude/skills/agentic-qa-core/references/skill-resolver.md`
 
@@ -8,7 +8,7 @@ This file is the per-session compact-rules cache for the Skill Resolver protocol
 The orchestrator copies one or more `## Skill: <slug>` blocks below into every subagent briefing under `## Project Standards (auto-resolved)`.
 Subagents trust those compact rules and only read the full SKILL.md when explicitly instructed.
 
-Skills indexed: 16
+Skills indexed: 23
 
 ---
 ## Skill: acli
@@ -84,6 +84,171 @@ Skills indexed: 16
 **Read full SKILL.md when**: the compact rules above are insufficient (e.g. novel scenario, debugging, or the briefing tells you to load the full skill).
 
 > Source: `.claude/skills/agentic-qa-onboard/SKILL.md` · phase: `bootstrap` · extraction strategy: B
+
+---
+
+## Skill: cavecrew
+
+**Purpose**: Decision guide for delegating to caveman-style subagents.
+
+**Compact Rules**:
+- path:line — `symbol` — short note
+- `cavecrew-investigator` returns site list.
+- Main thread picks 1-2 sites, hands paths to `cavecrew-builder`.
+- `cavecrew-reviewer` audits the diff.
+- Don't use `cavecrew-builder` when you don't already know the file. Spawn investigator first or main thread will eat tokens passing context.
+- Don't chain `cavecrew-investigator → cavecrew-builder` for a 5-file refactor. Builder will return `too-big.` and you'll have wasted a turn.
+- Don't ask `cavecrew-reviewer` for "general feedback" — it returns findings only, no architecture opinions. Use `Code Reviewer` for that.
+- Don't expect prose. Cavecrew output is structured, sometimes terse to the point of cryptic. If a human will read it directly, paraphrase.
+
+**Read full SKILL.md when**: the compact rules above are insufficient (e.g. novel scenario, debugging, or the briefing tells you to load the full skill).
+
+> Source: `.claude/skills/cavecrew/SKILL.md` · phase: `unknown` · extraction strategy: B
+
+---
+
+## Skill: caveman
+
+**Purpose**: Ultra-compressed communication mode.
+
+**Compact Rules**:
+- lite: "Your component re-renders because you create a new object reference each render. Wrap it in `useMemo`."
+- full: "New object ref each render. Inline object prop = new ref = re-render. Wrap in `useMemo`."
+- ultra: "Inline obj prop → new ref → re-render. `useMemo`."
+- wenyan-lite: "組件頻重繪，以每繪新生對象參照故。以 useMemo 包之。"
+- wenyan-full: "物出新參照，致重繪。useMemo .Wrap之。"
+- wenyan-ultra: "新參照→重繪。useMemo Wrap。"
+- lite: "Connection pooling reuses open connections instead of creating new ones per request. Avoids repeated handshake overhead."
+- full: "Pool reuse open DB connections. No new connection per request. Skip handshake overhead."
+- ultra: "Pool = reuse DB conn. Skip handshake → fast under load."
+- wenyan-full: "池reuse open connection。不每req新開。skip handshake overhead。"
+- wenyan-ultra: "池reuse conn。skip handshake → fast。"
+- Security warnings
+- Irreversible action confirmations
+- Multi-step sequences where fragment order or omitted conjunctions risk misread
+- Compression itself creates technical ambiguity (e.g., `"migrate table drop column backup first"` — order unclear without articles/conjunctions)
+- (truncated — read full SKILL.md for the rest)
+
+**Read full SKILL.md when**: the compact rules above are insufficient (e.g. novel scenario, debugging, or the briefing tells you to load the full skill).
+
+> Source: `.claude/skills/caveman/SKILL.md` · phase: `unknown` · extraction strategy: B
+
+---
+
+## Skill: caveman-commit
+
+**Purpose**: Ultra-compressed commit message generator.
+
+**Compact Rules**:
+- `<type>(<scope>): <imperative summary>` — `<scope>` optional
+- Types: `feat`, `fix`, `refactor`, `perf`, `docs`, `test`, `chore`, `build`, `ci`, `style`, `revert`
+- Imperative mood: "add", "fix", "remove" — not "added", "adds", "adding"
+- ≤50 chars when possible, hard cap 72
+- No trailing period
+- Match project convention for capitalization after the colon
+- Skip entirely when subject is self-explanatory
+- Add body only for: non-obvious *why*, breaking changes, migration notes, linked issues
+- Wrap at 72 chars
+- Bullets `-` not `*`
+- Reference issues/PRs at end: `Closes #42`, `Refs #17`
+- "This commit does X", "I", "we", "now", "currently" — the diff says what
+- "As requested by..." — use Co-authored-by trailer
+- "Generated with Claude Code" or any AI attribution
+- Emoji (unless project convention requires)
+- (truncated — read full SKILL.md for the rest)
+
+**Read full SKILL.md when**: the compact rules above are insufficient (e.g. novel scenario, debugging, or the briefing tells you to load the full skill).
+
+> Source: `.claude/skills/caveman-commit/SKILL.md` · phase: `unknown` · extraction strategy: B
+
+---
+
+## Skill: caveman-compress
+
+**Purpose**: Compress natural language memory files (CLAUDE.md, todos, preferences) into caveman format to save input tokens.
+
+**Compact Rules**:
+- The compression scripts live in `scripts/` (adjacent to this SKILL.md). If the path is not immediately available, search for `scripts/__main__.py` next to this SKILL.md.
+- From the directory containing this SKILL.md, run:
+- The CLI will:
+- detect file type (no tokens)
+- call Claude to compress
+- validate output (no tokens)
+- if errors: cherry-pick fix with Claude (targeted fixes only, no recompression)
+- retry up to 2 times
+- if still failing after 2 retries: report error to user, leave original file untouched
+- Return result to user
+- Articles: a, an, the
+- Filler: just, really, basically, actually, simply, essentially, generally
+- Pleasantries: "sure", "certainly", "of course", "happy to", "I'd recommend"
+- Hedging: "it might be worth", "you could consider", "it would be good to"
+- Redundant phrasing: "in order to" → "to", "make sure to" → "ensure", "the reason is because" → "because"
+- (truncated — read full SKILL.md for the rest)
+
+**Read full SKILL.md when**: the compact rules above are insufficient (e.g. novel scenario, debugging, or the briefing tells you to load the full skill).
+
+> Source: `.claude/skills/caveman-compress/SKILL.md` · phase: `unknown` · extraction strategy: B
+
+---
+
+## Skill: caveman-help
+
+**Purpose**: Quick-reference card for all caveman modes, skills, and commands.
+
+**Compact Rules**:
+- Display this reference card when invoked. One-shot — do NOT change mode, write flag files, or persist anything. Output in caveman style.
+- Mode stick until changed or session end.
+- Say "stop caveman" or "normal mode". Resume anytime with `/caveman`.
+- Default mode = `full`. Change it:
+- **Environment variable** (highest priority):
+- export CAVEMAN_DEFAULT_MODE=ultra
+- **Config file** (`~/.config/caveman/config.json`):
+- { "defaultMode": "lite" }
+- Set `"off"` to disable auto-activation on session start. User can still activate manually with `/caveman`.
+- Resolution: env var > config file > `full`.
+- Full docs: https://github.com/JuliusBrussee/caveman
+
+**Read full SKILL.md when**: the compact rules above are insufficient (e.g. novel scenario, debugging, or the briefing tells you to load the full skill).
+
+> Source: `.claude/skills/caveman-help/SKILL.md` · phase: `unknown` · extraction strategy: B
+
+---
+
+## Skill: caveman-review
+
+**Purpose**: Ultra-compressed code review comments.
+
+**Compact Rules**:
+- `🔴 bug:` — broken behavior, will cause incident
+- `🟡 risk:` — works but fragile (race, missing null check, swallowed error)
+- `🔵 nit:` — style, naming, micro-optim. Author can ignore
+- `❓ q:` — genuine question, not a suggestion
+- "I noticed that...", "It seems like...", "You might want to consider..."
+- "This is just a suggestion but..." — use `nit:` instead
+- "Great work!", "Looks good overall but..." — say it once at the top, not per comment
+- Restating what the line does — the reviewer can read the diff
+- Hedging ("perhaps", "maybe", "I think") — if unsure use `q:`
+- Exact line numbers
+- Exact symbol/function/variable names in backticks
+- Concrete fix, not "consider refactoring this"
+- The *why* if the fix isn't obvious from the problem statement
+
+**Read full SKILL.md when**: the compact rules above are insufficient (e.g. novel scenario, debugging, or the briefing tells you to load the full skill).
+
+> Source: `.claude/skills/caveman-review/SKILL.md` · phase: `unknown` · extraction strategy: B
+
+---
+
+## Skill: caveman-stats
+
+**Purpose**: Show real token usage and estimated savings for the current session.
+
+**Compact Rules**:
+- This skill is delivered by `hooks/caveman-stats.js` (read by `hooks/caveman-mode-tracker.js` on `/caveman-stats`). The model does not need to do anything when this skill fires — the hook returns `decision: "block"` with the formatted stats as the reason. The user sees the numbers immediately.
+
+**Read full SKILL.md when**: the compact rules above are insufficient (e.g. novel scenario, debugging, or the briefing tells you to load the full skill).
+
+> Source: `.claude/skills/caveman-stats/SKILL.md` · phase: `unknown` · extraction strategy: B
 
 ---
 
