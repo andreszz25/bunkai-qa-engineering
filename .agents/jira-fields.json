@@ -1,1 +1,82 @@
-{}
+{
+  "acceptance_criteria": {
+    "id": "customfield_10141",
+    "type": "string",
+    "name": "✅ Acceptance Criteria (Gherkin)"
+  },
+  "business_rules_specification": {
+    "id": "customfield_10134",
+    "type": "string",
+    "name": "🚩Business Rules Specification"
+  },
+  "scope": {
+    "id": "customfield_10142",
+    "type": "string",
+    "name": "Scope ⛳"
+  },
+  "mockup": {
+    "id": "customfield_10186",
+    "type": "string",
+    "name": "Mockup 🎴"
+  },
+  "workflow": {
+    "id": "customfield_10161",
+    "type": "string",
+    "name": "🧬WORKFLOW"
+  },
+  "story_points": {
+    "id": "customfield_10035",
+    "type": "number",
+    "name": "Story Points"
+  },
+  "weblink": {
+    "id": "customfield_10159",
+    "type": "string",
+    "name": "Weblink (URL)"
+  },
+  "actual_result": {
+    "id": "customfield_10133",
+    "type": "string",
+    "name": "🐞 Actual Result (Comportamiento)"
+  },
+  "expected_result": {
+    "id": "customfield_10137",
+    "type": "string",
+    "name": "✅ Expected Result (Output)"
+  },
+  "error_type": {
+    "id": "customfield_10190",
+    "type": "option",
+    "name": "Error Type"
+  },
+  "severity": {
+    "id": "customfield_10177",
+    "type": "option",
+    "name": "Severity 🚩"
+  },
+  "test_environment": {
+    "id": "customfield_10136",
+    "type": "option",
+    "name": "Test Environment 📦️"
+  },
+  "root_cause": {
+    "id": "customfield_10118",
+    "type": "option",
+    "name": "Root Cause🐞"
+  },
+  "workaround": {
+    "id": "customfield_10109",
+    "type": "string",
+    "name": "🚩 Workaround"
+  },
+  "evidence": {
+    "id": "customfield_10140",
+    "type": "string",
+    "name": "🧫EVIDENCE"
+  },
+  "fix": {
+    "id": "customfield_10114",
+    "type": "option",
+    "name": "Fix"
+  }
+}
