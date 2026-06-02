@@ -380,3 +380,54 @@ Self-check after every task: *did I make decision, fix bug, learn something non-
 ---
 
 *AI persistent memory. Update when behaviors / skills / rules change.*
+
+## Project Assessment (Phase 1)
+
+Assessment Date: 2026-05-25
+Target Project: Bunkai TMS (`upex-bunkai-tms`)
+
+### Testing Maturity: 0/4
+- Current state: None
+- Test files: 0
+- Frameworks: None configured
+- Coverage: Unknown
+
+### Documentation State: Good
+- README: yes (inherited from agentic-dev-boilerplate; product intent embedded in DESIGN.md + login page copy)
+- DESIGN.md: yes (comprehensive — visual identity, component vocabulary, brand rationale)
+- CONTEXT.md: yes (inherited from boilerplate; structural)
+- API docs: yes (OpenAPI auto-generated at `/api/openapi.json`; Scalar UI at `/api/docs`)
+- Architecture: partial (in migration files + `lib/` structure; no standalone architecture doc)
+- Setup guide: yes (INSTALLER.md)
+
+### Code Quality
+- [x] ESLint: configured (`eslint.config.js`, `@antfu/eslint-config` + `@next/eslint-plugin-next`)
+- [x] Prettier: configured (3.7.4)
+- [x] TypeScript: configured (`tsconfig.json`, strict mode inferred; `@types/react` 19 + `@types/bun` 1.3)
+- [x] Pre-commit hooks: configured (Husky 9 + lint-staged)
+
+### CI/CD Maturity: None
+- No `.github/workflows/` directory found
+- Deployments appear manual (Vercel CLI or Git push integration)
+- No automated test gate, no lint gate, no type-check gate in CI
+
+### Identified Risks
+
+| Risk | Severity | Mitigation |
+|---|---|---|
+| No test suite | HIGH | This boilerplate provides the test framework — `/adapt-framework` will wire it |
+| No CI/CD pipeline | MEDIUM | Configure GitHub Actions after `/adapt-framework` completes |
+| No `data-testid` attributes on UI components | MEDIUM | Establish `data-testid` convention during `/adapt-framework` |
+| n8n env vars present but no usage found | LOW | Document as Discovery Gap; investigate before wiring n8n tests |
+| `SUPABASE_PUBLISHABLE_KEY` vs `NEXT_PUBLIC_SUPABASE_ANON_KEY` key name inconsistency | LOW | Verify correct key name before wiring DB MCP |
+| No `runs`/`test_executions` table despite PAT `run:execute` scope | MEDIUM | Execution tracking may be a planned feature; do not test what doesn't exist |
+
+### Phase Prioritization
+- Phase 1: Complete — stack is well-documented; schema fully reverse-engineered from 8 migrations
+- Phase 2: Deferred (user choice — minimum viable scope)
+- Phase 3: Deferred (user choice — minimum viable scope)
+- Phase 4: Deferred (user choice — minimum viable scope)
+
+### Blockers
+- None blocking discovery
+- Phase 2 deferred: `.context/SRS/architecture.md` is missing, which will block `/adapt-framework`. Run Phase 2 before invoking `/adapt-framework`.
