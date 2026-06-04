@@ -1,112 +1,117 @@
-# ATC usage report ("Used in N tests")
+# TMS-ATC Usage | See a "Used in N tests" report
 
 **Jira Key:** [BK-22](https://upexgalaxy67.atlassian.net/browse/BK-22)
 **Epic:** [BK-13](https://upexgalaxy67.atlassian.net/browse/BK-13) (ATC Library (Atomic Test Components))
+**Type:** Story
+**Status:** Ready For Dev
 **Priority:** Medium
-**Story Points:** -
-**Status:** Shift-Left QA
+**Story Points:** 3
 
 ---
 
-## User Story
+## Overview
 
 ***Source spec:*** FR-013
 
-## User Story
+## User story
 
-As a tester reviewing an ATC, I want a "Used in N tests" report on the ATC detail page, so that I can see the downstream impact of any change before I make it.
+***As a*** Senior QA Engineer
+***I want to*** see a "Used in N tests" report on an ATC
+***So that*** I can understand the blast radius of a change before I make it.
 
-## Context
+## Definition of done
 
-Anchors PRD US 4.5 and implements SRS FR-013. Powers the "Used in N tests" widget on the ATC detail page and the impact preview before any destructive action.
-
----
-
-## Acceptance Criteria
-
-```gherkin
-Scenario: User views usage report for an ATC with active tests
-Given an ATC atc_id = 42 referenced by 3 active Tests
-And the caller has at least viewer role on the workspace
-When the caller GETs /atcs/42/usage
-Then the response is 200 OK
-And used_in[] contains exactly 3 entries
-And each entry has { test*id, slug, title, position*in_test }
-
-Scenario: ATC with zero usage returns empty list
-Given an ATC atc_id = 99 not referenced by any Test
-When the caller GETs /atcs/99/usage
-Then the response is 200 OK
-And used_in[] equals []
-And the response is NOT 404
-
-Scenario: Same ATC chained multiple times in one Test
-Given Test T1 chains ATC 42 at positions 1, 4, and 7
-When the caller GETs /atcs/42/usage
-Then used_in[] contains 3 entries for T1
-And position*in*test values are 1, 4, 7
-```
+- [ ] Feature works end-to-end against staging
+- [ ] Covered by an ATC chain anchored to a User Story + Acceptance Criterion
+- [ ] Acceptance Criteria verified by QA
+- [ ] Demoed to the team
 
 ---
 
-## Business Rules
+## QA Refinements (Shift-Left Analysis) — Added 2026-06-02
 
-- The endpoint reads from test*steps (join table linking Tests to ATCs), never from atc*steps
+Refined Acceptance Criteria live in the acceptance_criteria field.
 
-- Each row in test*steps with atc*id = {id} produces one entry in used_in
+### Edge Cases Identified
 
-- position*in*test is the position field on test*steps, not on atc*steps
+| # | Edge case | In original Story? | Criticality | Action |
+|---|-----------|-------------------|-------------|--------|
+| 1 | Same ATC at multiple positions within one Test (multi-position JOIN rows) | No (only in Architect Annotation) | High | Add to AC (PO confirm) |
+| 2 | ATC with zero usage — API returns { used_in: [] } NOT 404 | Partially (AC3 covers UI; API shape missing) | High | Add API-level AC (PO confirm) |
+| 3 | Cross-workspace ATC request returns 404, NOT 403 or 200 | No (only in Architect Annotation) | High | Add to AC (PO confirm) |
+| 4 | "Used in 1 test" singular copy | No | Medium | Add to AC (PO confirm) |
+| 5 | Unauthenticated caller gets 401 | No | High | Test only (NEEDS PO/DEV CONFIRMATION) |
+| 6 | PAT with wrong scope gets 403 | No | Medium | Test only (NEEDS PO/DEV CONFIRMATION) |
+| 7 | ATC UUID does not exist at all (not cross-workspace, just absent) | No | Medium | Test only (NEEDS PO/DEV CONFIRMATION) |
+| 8 | ATC referenced in 100+ Tests — performance boundary | No (only in Architect Annotation, contradictory fixture sizes) | Medium | Test only after performance target reconciled |
+| 9 | test_steps table absent (EPIC-BK-5 not merged) — endpoint behavior | No | High | Technical question for Dev |
+| 10 | Test deleted after being referenced in test_steps — orphan rows | No | High | Technical question for Dev (FK cascade rule from EPIC-BK-5) |
+| 11 | ATC referenced in 0 Tests AND test_steps table doesn't exist yet | No | Medium | Technical question for Dev |
 
-- Results are ordered by test slug ASC for stable UI rendering; ties broken by position ASC
+### Clarified Business Rules
 
-- Workspace scoping returns 404 (not 403) when the ATC belongs to a different workspace, to avoid leaking existence
+The following rules were extracted from analysis but are NOT stated explicitly in the original Story:
+
+- Workspace scoping: cross-workspace ATC access returns 404 (not 403 or 200) — existence-leak prevention pattern inherited from BK-13/BK-18
+- Empty result shape: a valid ATC with zero usage returns HTTP 200 { "used_in": [] }, NOT 404
+- Minimum caller role: caller must be an active workspace member (role >= viewer) — 401 if unauthenticated
+- List ordering: Tests ordered by slug ascending; within the same Test, positions ordered ascending (per Architect Annotation)
+
+### Critical Questions for PO
+
+1. ***When the same ATC appears at two positions within one Test, does the usage list show one row (Test-A, positions: 2, 5) or two rows (Test-A at position 2; Test-A at position 5)?***
+
+   - Context: AC2 says "each Test"; Architect Annotation says JOIN returns multiple rows without deduplication. These are consistent only if "each Test" means "each Test-position pair". The count label (N = distinct Tests or N = total rows) depends on the same answer.
+   - Impact if unanswered: Dev implements one model; QA tests the other. The count assertion in AC1 will either pass or fail based on which interpretation Dev chose, with no way to tell which is correct.
+   - Suggested answer: Display one row per Test with all positions listed (comma-separated), and count = distinct Tests. This matches the business phrasing "Used in N tests" and is the most user-readable format for the blast-radius use case.
+
+1. ***Does "Used in 1 test" show the singular form, or is it always "Used in N tests"?***
+
+   - Context: No AC addresses singular vs plural. Standard UX convention requires it but the exact copy is undefined.
+   - Impact if unanswered: UI copy will be inconsistent ("Used in 1 tests" is grammatically wrong); no way to write a deterministic text assertion.
+   - Suggested answer: Singular form: "Used in 1 test". Plural form: "Used in N tests" (N >= 2 or N = 0).
+
+1. ***What is the authoritative performance target for the GET /atcs/{id}/usage endpoint — <= 100 Tests or 10k Tests in the benchmark fixture?***
+
+   - Context: Architect Annotation 1 says "< 50ms p95 on ATCs referenced in <= 100 Tests"; Annotation 2 says "< 50ms p95 with 10k Tests in fixture". These are contradictory.
+   - Impact if unanswered: Dev writes a unit test against the wrong fixture size; QA cannot write a valid performance outline; the DoD performance check is untestable.
+   - Suggested answer: Clarify which fixture size is the production baseline expectation. 10k is more realistic for a mature TMS; 100 may be an MVP shortcut.
+
+### Technical Questions for Dev
+
+1. ***What is the FK cascade behavior on test*************steps.test*************id when a Test is deleted? If no CASCADE DELETE, orphaned test*************steps rows will pollute the usage report with references to deleted Tests.*** — The cascade rule is set by EPIC-BK-5. Confirm whether the usage query's JOIN will naturally exclude orphaned rows (via the INNER JOIN) or whether orphaned test*steps rows need a cleanup guard.
+
+1. ***If test*************steps and tests tables do not yet exist (EPIC-BK-5 not merged), what does the endpoint return? 200 with { used*************in: ******[******] }, 503 Service Unavailable, or a migration gate error?*** — This defines the behavior during the window between BK-22 landing and EPIC-BK-5 landing, which matters for CI integration tests.
+
+1. ***Which SQL query shape is authoritative — Annotation 1 (with t.workspace*************id = $session.workspace*************id WHERE clause and ORDER BY t.slug ASC, ts.position ASC) or Annotation 2 (simplified, no workspace WHERE, ORDER BY t.created******_******at)?*** — QA will write ordering assertions against the authoritative query.
+
+> Full refinement (Phases 1-5, outline DRAFT, risk + data feasibility) lives in the ATP DRAFT comment below.
 
 ---
 
-## Scope
+## Fields
 
-- GET /atcs/{id}/usage endpoint
+> Each rich-text field is a separate file in this folder.
 
-- Query joins test*steps to tests, filtered by test*steps.atc_id
-
-- Response shape: { used*in: [{ test*id, slug, title, position*in*test }] } ordered by slug ASC
-
-- Multiple positions in the same Test return as multiple entries
-
-- Empty array on zero references (no special "not used" payload)
-
-- Workspace scoping enforced at service layer
-
-- Unit tests for empty / single / multi-position / multi-test cases
-
-- OpenAPI entry
-
----
-
-## Workflow
-
-The ATC detail page calls GET /atcs/{id}/usage on mount. The service loads the ATC to verify it exists in the caller's workspace (returns 404 if not), then queries test*steps JOIN tests WHERE test*steps.atc*id = {id}, ordered by tests.slug ASC then test*steps.position ASC. Each row becomes one entry in the used_in array. The client renders this as a list under "Used in N tests" with deep links to each referencing Test.
-
----
-
-## Definition of Done
-
-- [ ] Implementation complete
-- [ ] Unit tests written
-- [ ] Code reviewed
-- [ ] Documentation updated
+- [Acceptance Criteria](./acceptance-criteria.md)
+- [Business Rules](./business-rules.md)
+- [Scope](./scope.md)
+- [Out Of Scope](./out-of-scope.md)
+- [Workflow](./workflow.md)
+- [Implementation Plan (Dev)](./implementation-plan.md)
+- [Acceptance Test Plan (QA)](./acceptance-test-plan.md)
+- [Acceptance Test Results (QA)](./acceptance-test-results.md)
 
 ---
 
 ## Metadata
 
 - **Created:** 5/20/2026
-- **Updated:** 5/21/2026
+- **Updated:** 6/2/2026
 - **Reporter:** Ely
-- **Assignee:** Unassigned
-- **Labels:** atc, mvp, reporting, wave-2
+- **Assignee:** Andrés Daniel Cumare Morales
+- **Labels:** atc, mvp, reporting, shift-left-2026-06-02, shift-left-reviewed, wave-2
 
 ---
 
 _Synced from Jira by sync-jira-issues_
-_Last sync: 2026-05-28T08:58:37.889Z_
