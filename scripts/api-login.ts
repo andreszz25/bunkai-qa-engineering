@@ -103,11 +103,12 @@ function extractTokenFromResponse(body: Record<string, unknown>): {
   expiresIn: number
   refreshToken: string | null
 } {
+  const pat = (body.pat ?? {}) as Record<string, unknown>;
   return {
-    accessToken: String(body.access_token ?? ''),
-    tokenType: String(body.token_type ?? 'Bearer'),
-    expiresIn: Number(body.expires_in ?? 86400),
-    refreshToken: body.refresh_token ? String(body.refresh_token) : null,
+    accessToken: String(pat.token ?? ''),
+    tokenType: 'Bearer',
+    expiresIn: 0,
+    refreshToken: null,
   };
 }
 
