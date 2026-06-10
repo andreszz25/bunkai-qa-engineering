@@ -190,7 +190,7 @@ link_types:
       outward: tests
       inward: is tested by
       fallback: relates
-      description: 'Coverage — Story is tested by a test artifact (Story → Test / Test Plan / Test Execution).'
+      description: Coverage — Story is tested by a test artifact (Story → Test / Test Plan / Test Execution).
       used_by: [shift-left-testing, sprint-testing, test-documentation, regression-testing]
 
     problem_incident:
@@ -198,7 +198,7 @@ link_types:
       outward: causes
       inward: is caused by
       fallback: relates
-      description: 'Causation — a defect filed against a Story under test (Story → Bug/Defect).'
+      description: Causation — a defect filed against a Story under test (Story → Bug/Defect).
       used_by: [sprint-testing]
 
     blocks:
@@ -215,7 +215,7 @@ link_types:
       outward: relates to
       inward: relates to
       fallback: null
-      description: 'Symmetric reference — degradation target ONLY when a required link type is absent. Direction is lost.'
+      description: Symmetric reference — degradation target ONLY when a required link type is absent. Direction is lost.
       used_by: [agentic-qa-core]
 
     test_design:
@@ -223,7 +223,7 @@ link_types:
       outward: designs
       inward: is designed by
       fallback: test
-      description: 'Xray refinement — a Test designs a requirement/spec artifact.'
+      description: Xray refinement — a Test designs a requirement/spec artifact.
       used_by: [test-documentation]
 
     test_execute:
@@ -231,7 +231,7 @@ link_types:
       outward: executes
       inward: is executed by
       fallback: test
-      description: 'Xray refinement — a Test Execution executes a specific Test.'
+      description: Xray refinement — a Test Execution executes a specific Test.
       used_by: [regression-testing]
 
     test_automation:
@@ -239,7 +239,7 @@ link_types:
       outward: automation test for
       inward: is automated by
       fallback: test
-      description: 'Xray refinement — binds an automated test to the manual Test it automates.'
+      description: Xray refinement — binds an automated test to the manual Test it automates.
       used_by: [test-automation]
 
 # Issue types (`work_types`) plus the canonical statuses + transitions the
