@@ -1,14 +1,15 @@
-# Async one-way Jira import by JQL (ADF → Markdown, idempotency on external_id)
+# Jira Import | Pull Jira issues by JQL
 
-**Jira Key:** [BK-17](https://upexgalaxy67.atlassian.net/browse/BK-17)
-**Epic:** [BK-12](https://upexgalaxy67.atlassian.net/browse/BK-12) (User Stories & Acceptance Criteria)
+**Jira Key:** [BK-17](https://jira.upexgalaxy.com/browse/BK-17)
+**Epic:** [BK-12](https://jira.upexgalaxy.com/browse/BK-12) (User Stories & Acceptance Criteria)
+**Type:** Story
+**Status:** Ready For QA
 **Priority:** Medium
-**Story Points:** -
-**Status:** Ready For Dev
+**Story Points:** 5
 
 ---
 
-## User Story
+## Overview
 
 ***Source spec:*** FR-009
 
@@ -41,107 +42,64 @@ The user opens Project settings, picks ***Import from Jira***, enters a JQL, and
 
 ---
 
-## Acceptance Criteria
+## QA Refinements (Shift-Left Analysis)
 
-```gherkin
-Feature: Async one-way Jira import by JQL
+### Refined Acceptance Criteria (Given/When/Then, specific data)
 
-  Scenario: Start an import job with a valid JQL
-    Given the Workspace has valid Jira credentials configured
-    And the JQL "project = ACME AND issuetype = Story" returns 12 issues
-    When the user POSTs /api/imports with project*id=P and jira*jql
-    Then the API responds 202 with { import*job*id, status: "queued" }
-    And polling /api/imports/{id} eventually returns { status: "completed", imported_count: 12, errors: [] }
+***AC1 — Start + poll (fresh import)***: Given a member of "BK-9 QA Testing" on project "BK-9 Module Test Project" (`ae10a3bd-574f-4caf-8076-f19a8e80f5a6`) with no prior `import*jobs` history, when they `POST /api/v1/imports` with `{ project*id: "ae10a3bd-...", jql: "key in (BK-8, BK-9)" }`, then the API returns 202 `{ import*job*id, status: "queued" }` and polling shows `queued → running → completed` with `imported*count = 2`, `created*count = 2`, `updated_count = 0`, `errors = []`.
 
-  Scenario: Re-running the same import is idempotent
-    Given an import previously created User Stories with external_id ACME-1..ACME-12
-    When the user starts a new import with the same JQL
-    Then the second job completes with imported*count=12, created*count=0, updated_count=12
-    And no duplicate user*stories rows exist for external*id ACME-1..ACME-12
+***AC2 — Idempotent re-run (additive-only)***: Given the AC1 job has completed, when the same payload is submitted again, then the new job completes with `created*count = 0`, `updated*count = 2`, zero duplicate `user*stories` rows (DB-verified `external*id IN ('BK-8','BK-9')`), and module placement / status survive the re-import untouched (only `title`/`description` refresh).
 
-  Scenario: Issues whose Jira component matches a Module name route to that Module
-    Given Bunkai has Modules named "Auth", "Billing" under Project P
-    And Jira issue ACME-5 has component "Auth"
-    When the import processes ACME-5
-    Then the created User Story has module_id pointing to the "Auth" Module
+***AC3 — Component routing***: Given a Module name matches (case-insensitive) the Jira `component` of an issue in the JQL result set, when the import completes, then that story's `module*id` resolves to the matching Module (DB join `user*stories.module_id = modules.id AND lower(modules.name) = lower(component)`).
 
-  Scenario: Issues with no matching component fall into the Inbox Module
-    Given Jira issue ACME-9 has no component or a component name not present as Module in P
-    When the import processes ACME-9
-    Then the User Story is created under a Module named "Inbox" (auto-created under P if missing)
-    And errors[] contains no entry for ACME-9 (Inbox routing is not an error)
+***AC4 — Inbox fallback****: Given an issue carries no component (or an unmatched one), when the import completes, then an "Inbox" Module is auto-created at root level (`parent*module*id: null`) if absent, the story routes there, and ****no*** `errors[]` entry is recorded.
 
-  Scenario: JQL above the 500-issue ceiling is chunked
-    Given a JQL that returns 1200 Jira issues
-    When the import job runs
-    Then the job processes the issues in chunks of at most 500
-    And the final imported_count equals 1200
-    And status is "completed"
+***AC5 — Chunking (>100 issues)****: Given a JQL returns more than 100 issues (Jira Cloud page-size ceiling = 100), when the import runs, then the worker pages in ≤100-issue chunks and the final `imported_count` equals the total. ****Feasibility: UNKNOWN — depends on whether a >100-issue JQL is reachable on the real ****`upexgalaxy`**** corpus; to be probed live in Stage 2, may be DEFERRED if infeasible.***
 
-  Scenario: Invalid Jira credentials fail the job
-    Given the Workspace Jira credentials are revoked
-    When a user starts an import
-    Then the job transitions to status="failed" with errors[] containing { code: "jira_unauthorized" }
-```
+***AC6 — Bad credentials****: Given `ATLASSIAN*URL`/`ATLASSIAN*EMAIL`/`ATLASSIAN*API*TOKEN` are missing or invalid, when the worker calls Jira `/search`, then `errors[].code = "jira_unauthorized"` and `status = "failed"` (confirmed at `client.ts:120-122,143-145` and `import-runner.ts:122-124`). ****Feasibility: LIKELY UNTESTABLE LIVE — staging creds are confirmed live & working (existing completed job ****`b4b8e74c-...`**** proves it); forcing this path requires disrupting shared staging config. Recommended verdict path: VERIFIED-BY-CODE-INSPECTION.***
+
+### Edge Cases Identified
+
+- ***Concurrent import 409*** (shift-left Gap #5, now CLOSED): a second `POST /api/v1/imports` for a project with an active (`queued`/`running`) job returns 409 `{ reason: "import*in*progress" }`, enforced at the DB layer by the partial UNIQUE index `import*jobs*one*active*per_project` (migration `0020`) — race-proof, not just app-level.
+- ***Crash recovery / stuck-****`running` (shift-left Gap #1, partially open): re-run is the chosen crash-recovery strategy (Option A, confirmed by Ely) and is safe/idempotent. However `next*page*token` is persisted but never read back on restart, and ****no timeout sweeper exists**** — a worker that dies mid-job leaves the row stuck `running` forever, permanently blocking new imports on that project. This is a ****documented residual structural risk***, not exercisable live (cannot force a mid-job crash safely).
+- ***Unsupported ADF nodes degrade silently***: tables, panels, emoji/expand macros flatten to text content — nothing throws, no `errors[]` entry (graceful degradation, not "document what strips/converts/errors" per the original shift-left ask, but confirmed safe).
+- ***Custom-field ACs import as 0***: confirmed expected — Acceptance Criteria are extracted from the description body only; issues keeping ACs in a Jira custom field correctly import zero ACs.
+- ***429 backoff exhaustion surfaces as generic ***`job*failed`: the backoff schedule (1s/2s/4s/8s/16s, max 5 retries) matches the architect's spec, but exhaustion produces a generic `job*failed` code rather than a distinguishable rate-limit code — minor observability gap, not an AC violation.
+
+### Clarified Business Rules
+
+- `external*id = issue.key.trim().toUpperCase()`; upsert is keyed on `(project*id, external*id, archived*at IS NULL)`.
+- Re-import updates ONLY `title`/`description`; module placement and status are intentionally left untouched (manual moves survive re-import).
+- AC reconciliation on re-import is additive-only — appends criteria whose `lower(title)` isn't already present; never removes or restores manually edited/removed ACs.
+- Inbox Module is created at ***root level*** (`parent*module*id: null`), positioned after existing root siblings.
+- Descriptions are truncated at 50 KB with a visible Markdown blockquote marker (confirms "truncate with marker" was the chosen option for CQ#3).
+- Only `summary, description, components, issuetype` are read from Jira `SEARCH_FIELDS` — all other fields (epic link, story points, labels, fixVersions, priority) are genuinely discarded, confirmed out-of-scope per Ely's Phase-2 list.
 
 ---
 
-## Business Rules
-
-- import is one-way (Jira -> Bunkai); Bunkai never writes back to Jira in this story
-
-- external_id is the idempotency key (Project + uppercase Jira key)
-
-- max 500 issues per Jira search request; jobs auto-chunk above that
-
-- a job result includes imported*count, created*count, updated*count, skipped*count, errors[]
-
-- per-issue failures append to errors[] but do not abort the job
-
-- Inbox auto-creation: if no Module named "Inbox" exists under Project P, create one before placing unmatched issues
-
-- the worker honors Jira rate limits (429 -> exponential backoff, max 5 retries)
+**QA Acceptance Test Plan posted as a 4-part comment series (jira-native modality — **`Acceptance Test Plan (ATP)`** custom field not configured on this instance). Test Results placeholder posted; full ATR to follow at Stage 3.**
 
 ---
 
-## Scope
+## Fields
 
-- POST /api/imports - enqueue a Jira import job, return import*job*id
-- GET /api/imports/:id - poll job status (queued | running | completed | failed)
-- Background worker: a Supabase Edge Function triggered by pg*cron reads queued rows from the import*jobs table and calls the Jira REST search endpoint
-- ADF -> Markdown converter (in-house) covering headings, lists, code blocks, links, paragraphs
-- AC heuristic parser: detect "Acceptance Criteria" / "AC:" heading or labeled section, split bullets
-- Component-to-Module name match (case-insensitive); auto-create "Inbox" if no match
-- Idempotent upsert on user*stories.external*id (per Project)
-- Chunking at 500 issues per Jira search call (uses nextPageToken / startAt)
-- Per-issue error capture into errors[] without aborting the whole job
+> Each rich-text field is a separate file in this folder.
 
----
-
-## Workflow
-
-The user opens the Project settings, picks "Import from Jira", enters a JQL, and submits. The API enqueues a job row in import*jobs and returns import*job*id with status="queued". A scheduled worker (cron or Supabase Edge Function) picks up queued jobs, fetches credentials from the Workspace integration config, calls Jira REST /search in chunks of 500, parses each issue's ADF description into Markdown, runs the AC heuristic to split out Acceptance Criteria, resolves the target Module (component match or Inbox), and upserts user*stories + acceptance*criteria rows keyed on external*id. Status transitions to running -> completed (or failed), with counts and per-issue errors recorded on the import_jobs row for polling.
-
----
-
-## Definition of Done
-
-- [ ] Implementation complete
-- [ ] Unit tests written
-- [ ] Code reviewed
-- [ ] Documentation updated
+- [Out Of Scope](./out-of-scope.md)
+- [Implementation Plan (Dev)](./implementation-plan.md)
+- [Acceptance Test Plan (QA)](./acceptance-test-plan.md)
+- [Acceptance Test Results (QA)](./acceptance-test-results.md)
 
 ---
 
 ## Metadata
 
 - **Created:** 5/20/2026
-- **Updated:** 5/28/2026
+- **Updated:** 6/7/2026
 - **Reporter:** Ely
-- **Assignee:** Ely
+- **Assignee:** Andrés Daniel Cumare Morales
 - **Labels:** integration, jira-import, mvp, shift-left-2026-05-27, shift-left-reviewed, wave-2
 
 ---
 
 _Synced from Jira by sync-jira-issues_
-_Last sync: 2026-05-28T08:58:36.844Z_
