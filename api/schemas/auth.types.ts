@@ -55,42 +55,66 @@ export interface LoginPayload {
 }
 
 /**
- * Token response from authentication endpoints.
- * Compatible with IdentityServer4 token response.
- * TODO: Replace with OpenAPI schema type after sync.
+ * Raw BK signin response from POST /api/v1/auth/signin.
+ * Returns both a Supabase session (for cookie auth) and a PAT (for Bearer auth).
+ */
+export interface BkSignInResponse {
+  user: { id: string, email: string | null }
+  session: {
+    access_token: string
+    refresh_token: string
+    expires_at?: number
+    token_type: string
+  }
+  pat: {
+    token: string // bk_pat_* — use as Bearer token
+    id: string
+    name: string
+    scopes: string[]
+    expires_at: string | null
+  }
+}
+
+/**
+ * Normalized token response — compatible with api-auth.setup.ts.
+ * authenticateSuccessfully() maps BkSignInResponse to this shape.
+ * access_token = PAT token (bk_pat_*) for Bearer auth on requireAuth endpoints.
  */
 export interface TokenResponse {
-  access_token: string
+  access_token: string // PAT token
   token_type: string
   expires_in: number
   refresh_token?: string
-  scope?: string
 }
 
 /**
  * Error response for failed authentication.
- * TODO: Replace with OpenAPI endpoint type after sync (if documented in spec).
  */
 export interface AuthErrorResponse {
-  error: string
-  statusCode?: number
-  identityServerError?: {
-    error: string
-    error_description: string
+  error: {
+    code: string
+    message: string
+    request_id?: string
   }
-  hint?: string
 }
 
 /**
- * User info response from /api/auth/me.
- * TODO: Replace with OpenAPI endpoint type after sync.
+ * User info response from GET /api/v1/me.
  */
 export interface UserInfoResponse {
   user: {
     id: string
-    email: string
-    name: string
-    createdAt: string
-    updatedAt: string
+    email: string | null
+    name?: string
+    role?: string
   }
+  workspaces: Array<{
+    id: string
+    slug: string
+    name: string
+    plan: string
+    owner_user_id: string
+    created_at: string
+  }>
+  active_workspace_id: string | null
 }

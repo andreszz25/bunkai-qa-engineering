@@ -177,6 +177,71 @@ unmapped:
 # — declare a slug here when the methodology expects a field semantically but
 # no real Jira field exists yet, then promote it to `required:` once configured.)
 
+# Issue-link types the methodology resolves via {{jira.link_types.<slug>.<sub>}}
+# (sub = name | outward | inward | fallback). Workspace-specific values are
+# synced into `.agents/jira-link-types.json` by `bun run jira:sync-link-types`;
+# this section only declares which slugs the methodology expects + their
+# documentation fallback. See agentic-qa-core/references/traceability-linking.md
+# §2-3 for the full QA link catalog and degradation rules.
+link_types:
+  required:
+    test:
+      name: Test
+      outward: tests
+      inward: is tested by
+      fallback: relates
+      description: 'Coverage — Story is tested by a test artifact (Story → Test / Test Plan / Test Execution).'
+      used_by: [shift-left-testing, sprint-testing, test-documentation, regression-testing]
+
+    problem_incident:
+      name: Problem/Incident
+      outward: causes
+      inward: is caused by
+      fallback: relates
+      description: 'Causation — a defect filed against a Story under test (Story → Bug/Defect).'
+      used_by: [sprint-testing]
+
+    blocks:
+      name: Blocks
+      outward: blocks
+      inward: is blocked by
+      fallback: relates
+      description: 'Blocking — QA blocks a Story on an open defect (Bug/Defect → Story, defect_reported transition).'
+      used_by: [sprint-testing]
+
+  optional:
+    relates:
+      name: Relates
+      outward: relates to
+      inward: relates to
+      fallback: null
+      description: 'Symmetric reference — degradation target ONLY when a required link type is absent. Direction is lost.'
+      used_by: [agentic-qa-core]
+
+    test_design:
+      name: Test Design
+      outward: designs
+      inward: is designed by
+      fallback: test
+      description: 'Xray refinement — a Test designs a requirement/spec artifact.'
+      used_by: [test-documentation]
+
+    test_execute:
+      name: Test Execute
+      outward: executes
+      inward: is executed by
+      fallback: test
+      description: 'Xray refinement — a Test Execution executes a specific Test.'
+      used_by: [regression-testing]
+
+    test_automation:
+      name: Test Automation
+      outward: automation test for
+      inward: is automated by
+      fallback: test
+      description: 'Xray refinement — binds an automated test to the manual Test it automates.'
+      used_by: [test-automation]
+
 # Issue types (`work_types`) plus the canonical statuses + transitions the
 # methodology requires per work type. Validated by `bun run jira:check` against
 # the catalog at `.agents/jira-workflows.json`. Status / transition slugs are

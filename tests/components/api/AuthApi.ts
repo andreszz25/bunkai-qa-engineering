@@ -15,7 +15,7 @@
  */
 
 import type { APIResponse } from '@playwright/test';
-import type { AuthErrorResponse, LoginPayload, TokenResponse, UserInfoResponse } from '@schemas/auth.types';
+import type { AuthErrorResponse, BkSignInResponse, LoginPayload, TokenResponse, UserInfoResponse } from '@schemas/auth.types';
 import type { TestContextOptions } from '@TestContext';
 
 import { ApiBase } from '@api/ApiBase';
@@ -23,7 +23,7 @@ import { expect } from '@playwright/test';
 import { atc, step } from '@utils/decorators';
 
 // Re-export types for consumers that import from AuthApi
-export type { AuthErrorResponse, LoginPayload, TokenResponse, UserInfoResponse } from '@schemas/auth.types';
+export type { AuthErrorResponse, BkSignInResponse, LoginPayload, TokenResponse, UserInfoResponse } from '@schemas/auth.types';
 
 // ============================================
 // Auth API Component
@@ -74,28 +74,35 @@ export class AuthApi extends ApiBase {
   async authenticateSuccessfully(
     credentials: LoginPayload,
   ): Promise<[APIResponse, TokenResponse, LoginPayload]> {
-    // ACTION: POST login credentials
-    const [response, body, sentPayload] = await this.apiPOST<TokenResponse, LoginPayload>(
+    // ACTION: POST login credentials — BK returns { user, session, pat }
+    const [response, body, sentPayload] = await this.apiPOST<BkSignInResponse, LoginPayload>(
       this.config.auth.loginEndpoint,
       credentials,
     );
 
-    // Fixed assertions - validates successful authentication
+    // Fixed assertions
     expect(response.status()).toBe(200);
-    expect(body.access_token).toBeDefined();
-    expect(body.token_type).toBe('Bearer');
-    expect(body.expires_in).toBeGreaterThan(0);
+    expect(body.pat?.token).toBeDefined();
+    expect(body.session?.access_token).toBeDefined();
+    expect(body.user?.email).toBe(credentials.email);
 
-    // Store token for subsequent requests
-    this.setAuthToken(body.access_token);
+    // Store PAT as Bearer token for requireAuth endpoints (e.g. /me, /workspaces, /projects)
+    this.setAuthToken(body.pat.token);
 
-    // VERIFICATION: Confirm the session is valid via GET /auth/me
+    // VERIFICATION: session is valid via GET /me (uses Bearer PAT via requireAuth)
     const [meResponse, meBody] = await this.getCurrentUser();
     expect(meResponse.status()).toBe(200);
     expect(meBody.user).toBeDefined();
-    expect(meBody.user.email).toBe(credentials.email);
 
-    return [response, body, sentPayload];
+    // Normalize to TokenResponse shape expected by api-auth.setup.ts
+    const tokenResponse: TokenResponse = {
+      access_token: body.pat.token,
+      token_type: 'Bearer',
+      expires_in: 0,
+      refresh_token: body.session.refresh_token,
+    };
+
+    return [response, tokenResponse, sentPayload];
   }
 
   /**

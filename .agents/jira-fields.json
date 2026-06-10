@@ -1,8 +1,13 @@
 {
   "acceptance_criteria": {
-    "id": "customfield_10141",
+    "id": "customfield_10063",
     "type": "string",
     "name": "✅ Acceptance Criteria (Gherkin)"
+  },
+  "acceptance_test_plan": {
+    "id": "customfield_10067",
+    "type": "string",
+    "name": "🧪 Acceptance Test Plan (ATP)"
   },
   "business_rules_specification": {
     "id": "customfield_10134",
