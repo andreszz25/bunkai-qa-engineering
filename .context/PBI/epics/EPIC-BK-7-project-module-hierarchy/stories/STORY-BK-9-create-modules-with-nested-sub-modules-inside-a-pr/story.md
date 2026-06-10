@@ -1,122 +1,104 @@
-# Create Modules (with nested sub-modules) inside a Project
+# TMS-Module | Create modules with nested sub-modules
 
-**Jira Key:** [BK-9](https://upexgalaxy67.atlassian.net/browse/BK-9)
-**Epic:** [BK-7](https://upexgalaxy67.atlassian.net/browse/BK-7) (Project & Module Hierarchy)
+**Jira Key:** [BK-9](https://jira.upexgalaxy.com/browse/BK-9)
+**Epic:** [BK-7](https://jira.upexgalaxy.com/browse/BK-7) (Project & Module Hierarchy)
+**Type:** Story
+**Status:** QA Approved
 **Priority:** Medium
-**Story Points:** -
-**Status:** Shift-Left QA
+**Story Points:** 13
 
 ---
 
-## User Story
+## Overview
 
 ***Source spec:*** FR-006
 
-## User Story
+## User story
 
-As a Project member, I want to define Modules (and nested sub-modules up to depth 6) so that the test repository is organized by product area. Implements the create-and-nest side of FR-006.
+***As a*** Senior QA Engineer
+***I want to*** create Modules and nest sub-modules (up to 6 levels deep) inside a Project
+***So that*** my test repository mirrors the product's real structure (Login, Payment, Dashboard, …) instead of a flat list I cannot navigate.
 
----
+## Definition of done
 
-## Acceptance Criteria
-
-```gherkin
-Scenario: Create a top-level Module
-Given a project member of Project P
-When they POST /api/v1/projects/P/modules with { name: "Cart" }
-Then the system inserts a modules row with parent*module*id = null and path "/cart"
-And returns 201 with { module_id, path: "/cart" }
-
-Scenario: Create a nested sub-module
-Given Project P already has a Module "Cart" (id = m_cart, path = "/cart")
-When a member POSTs a Module with { name: "Add to Cart", parent*module*id: "m_cart" }
-Then the system inserts modules with parent*module*id = "m_cart" and path "/cart/add-to-cart"
-And returns 201
-
-Scenario: Depth warning at depth 4
-Given a member creates a Module at depth 4 (parent_module is at depth 3)
-When the POST succeeds
-Then the response metadata includes a soft warning DEPTH*APPROACHING*LIMIT
-
-Scenario: Depth exceeded at depth 7
-Given a member attempts to create a Module under a depth-6 parent
-When they POST
-Then the system returns 400 with code MODULE*DEPTH*EXCEEDED and no row is inserted
-
-Scenario: Parent module belongs to different project rejected
-Given Module m_x belongs to Project A
-When a member of Project B POSTs a Module with parent*module*id = m_x
-Then the system returns 400 with code PARENT*PROJECT*MISMATCH
-```
+- [ ] Feature works end-to-end against staging
+- [ ] Covered by an ATC chain anchored to a User Story + Acceptance Criterion
+- [ ] Acceptance Criteria verified by QA
+- [ ] Demoed to the team
 
 ---
 
-## Business Rules
+## QA Refinements (Shift-Left Analysis) — 2026-06-02
 
-- name MUST be 2-80 chars.
+> Pre-sprint AC refinement by QA. Full ATP DRAFT in Acceptance Test Plan field.
 
-- depth MUST be <=6 (computed from path).
+### Refined Acceptance Criteria (key additions)
 
-- parent_module MUST belong to the same Project as the new Module.
+- Warning fires at resulting depth 5 AND depth 6 (parent at level 4+). No warning at depths 1–4.
+- Description field: max 500 characters, Markdown rendered in tree view (3-line truncate + "more" expand).
+- Depth enforcement: app layer (early return) + DB constraint (safety net).
 
-- path is server-computed; clients MUST NOT set path directly.
+### Edge Cases Identified
 
-- Cycle detection NOT required on create (no parent can point back to a not-yet-existing child).
+- Name at exact boundaries: 2 chars (min) and 80 chars (max) must be accepted.
+- Name of 81 chars must be rejected.
+- Whitespace-only name must be rejected (treated as empty).
+- Special characters (emoji, RTL, HTML tags) must be sanitized / stored as literal text.
+- Viewer-role user attempting module creation must receive 403 / button disabled in UI.
+- Concurrent sibling creates: position ordering must be deterministic.
+- Cross-workspace: user from WS-A cannot create modules in WS-B.
+- Depth 6 creation: module IS created, warning IS shown.
+- Description of 501+ chars: rejected with validation message.
 
----
+### Clarified Business Rules
 
-## Scope
+- Warning trigger: resulting depth >= 5 (parent depth >= 4). Fires at depth 5 and depth 6.
+- Depth enforcement: both app layer (early return, no DB call) and DB constraint (hard guard).
+- Description: optional, max 500 chars, Markdown stored, renders in tree view below module name (3-line preview + expand).
 
-- POST /api/v1/projects/{id}/modules endpoint
-- name validation: 2-80 chars
-- Optional parent*module*id (nullable for top-level)
-- Optional description (Markdown)
-- Auto-compute path materialized column
-- Depth limit: hard 6, soft warning at 4
-- parent must belong to same Project
+### Open Questions for Dev (non-blocking for PO)
 
----
-
-## Workflow
-
-1. Project member opens the tree view of their Project.
-
-2. Clicks "+ New Module" (top-level) or "+ Sub-module" on an existing node.
-
-3. UI shows name input + description textarea.
-
-4. POST /api/v1/projects/{id}/modules with { name, parent*module*id?, description? }.
-
-5. Server validates project membership + parent constraints + depth limit.
-
-6. Server computes slug from name and path from parent.path + slug.
-
-7. Insert modules row.
-
-8. Return 201 with { module_id, path }.
-
-9. UI inserts the new node in the tree.
+1. Module creation pattern: REST endpoint (`POST /api/v1/modules`) or Server Action / Supabase RPC?
+2. Position assignment strategy on concurrent sibling creates?
+3. Does `POST /api/v1/modules` support `Idempotency-Key` header?
+4. Does module creation write to `activity_log`?
+5. Does Supabase Realtime broadcast on `modules` INSERT?
+6. Exact error message text for AC3 (min name) and AC5 (depth exceeded)?
 
 ---
 
-## Definition of Done
+## Fields
 
-- [ ] Implementation complete
-- [ ] Unit tests written
-- [ ] Code reviewed
-- [ ] Documentation updated
+> Each rich-text field is a separate file in this folder.
+
+- [Out Of Scope](./out-of-scope.md)
+- [Implementation Plan (Dev)](./implementation-plan.md)
+- [Acceptance Test Plan (QA)](./acceptance-test-plan.md)
+- [Acceptance Test Results (QA)](./acceptance-test-results.md)
+
+---
+
+## Traceability
+
+### Bugs (2)
+
+- [BK-67](https://jira.upexgalaxy.com/browse/BK-67): [BK-9] Module creation at depth ≥5: success toast suppressed — only deep-nesting warning shown _(Open)_
+- [BK-68](https://jira.upexgalaxy.com/browse/BK-68): [BK-9] Create Module form allows submitting 1-char names — no client-side min-length validation _(Open)_
+
+### Improvement (1)
+
+- [BK-69](https://jira.upexgalaxy.com/browse/BK-69): [BK-9] Module name field stores raw HTML tags — inconsistent with description sanitization _(Open)_
 
 ---
 
 ## Metadata
 
 - **Created:** 5/19/2026
-- **Updated:** 5/27/2026
+- **Updated:** 6/6/2026
 - **Reporter:** Ely
-- **Assignee:** Unassigned
-- **Labels:** hierarchy, mvp, wave-1
+- **Assignee:** Andrés Daniel Cumare Morales
+- **Labels:** hierarchy, mvp, shift-left-2026-06-02, shift-left-reviewed, wave-1
 
 ---
 
 _Synced from Jira by sync-jira-issues_
-_Last sync: 2026-05-28T08:58:35.382Z_
