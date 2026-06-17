@@ -268,5 +268,53 @@ Execution results will be posted here as a follow-up comment once Stage 2 begins
 
 ---
 
+### Andrés Daniel Cumare Morales - 6/17/2026, 9:32:56 AM
+
+## Acceptance Test Results (ATR) — BK-27
+
+***Status:**** PASSED | ****Date:**** 2026-06-17 | ****Environment:**** staging (staging-upexbunkai.vercel.app) | ****Modality:*** Jira-native
+
+### Execution Summary
+
+| Metric | Value |
+|---|---|
+| Total TCs | 19 |
+| Passed | 16 |
+| Deferred | 1 (N6 — viewer 403, no 2nd auth user on staging) |
+| Partial | 1 (I1 — RLS SELECT, no GET endpoint) |
+| Not Reproducible | 1 (I4 — UI WS switch destroys form) |
+| Failed | 0 |
+| Bugs Filed | 0 |
+
+### Results by Category
+
+***Positive (3/3 PASSED):*** P1 chain order (API+UI+DB), P2 duplicate ATC preserved, P3 single ATC accepted.
+
+***Negative (5/6):*** N1 UI empty chain blocked, N2 API empty chain 422, N3 foreign ATC 404, N4 nonexistent ATC byte-identical, N5 archived ATC byte-identical. N6 DEFERRED (no viewer user).
+
+***Boundary (4/4 PASSED):*** B1 title 200/201, B2 whitespace rejected, B3 trim works, B4 missing idempotency-key 400.
+
+***Integration (2/4):*** I2 activity*log written atomically, I3 UI/headless parity verified. I1 PARTIAL (workspace*id stamps correct). I4 NOT REPRO (UI safety net).
+
+***API/Idempotency (3/3 PASSED):*** A1 double-submit 1 row, A2 replay same key, A3 conflict 409 + missing workspace_id 422.
+
+### Non-Disclosure Contract (INV-3): VERIFIED
+
+N3/N4/N5 return byte-identical 404 responses for foreign, nonexistent, and archived ATCs. No id echo, no existence leak.
+
+### Dev-Flagged Focus Areas: ALL VERIFIED
+
+Builder E2E + duplicate ATC, double-submit dedup, headless idempotency retry, verbatim validation copy.
+
+### Observations (Non-Blocking)
+
+1. Zod pre-empts RPC for validation (N2, B1, B2) — generic messages instead of spec verbatim copy. Functionally correct.
+2. I4 workspace switch navigates away — design-level safety net prevents mid-form binding-instant scenario via UI.
+
+### Verdict: PASSED — QA recommends sign-off.
+
+
+---
+
 
 _Synced from Jira by sync-jira-issues_

@@ -3,7 +3,7 @@
 **Jira Key:** [BK-27](https://jira.upexgalaxy.com/browse/BK-27)
 **Epic:** [BK-24](https://jira.upexgalaxy.com/browse/BK-24) (Tests (chains of ATCs))
 **Type:** Story
-**Status:** In Test
+**Status:** QA Approved
 **Priority:** Medium
 **Story Points:** 8
 
@@ -108,7 +108,7 @@ Shift-Left QA reviewed this Story. The full ATP DRAFT (25 scenarios across Posit
 ## Metadata
 
 - **Created:** 5/27/2026
-- **Updated:** 6/15/2026
+- **Updated:** 6/17/2026
 - **Reporter:** Ely
 - **Assignee:** Andrés Daniel Cumare Morales
 - **Labels:** master-sprint-4, mvp, shift-left-2026-06-06, shift-left-reviewed, tests-epic
