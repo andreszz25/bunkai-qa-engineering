@@ -3,7 +3,7 @@
   "templateRepo": "upex-galaxy/agentic-qa-boilerplate",
   "templateCommit": "462ff09c0eace4ead0d6bbe6e716eb67ce65f885",
   "perComponentCommit": {
-    "skills": "c7605d0eec5ba9cd53d8960f130a879524e58ea1",
+    "skills": "06f22a35ba95efd9ea9ccdeeb1e7cfd89685b689",
     "commands": "a91280e3bab2cd192f8c95108a7b0cc58bf80036",
     "scripts": "c7605d0eec5ba9cd53d8960f130a879524e58ea1",
     "docs": "dc84873fa3252f23eff2e10d672ff3391a022a4f",
@@ -54,6 +54,6 @@
     }
   },
   "cliVersion": "7.0",
-  "lastSyncedAt": "2026-06-15T12:21:36.147Z",
+  "lastSyncedAt": "2026-06-19T08:37:02.922Z",
   "variableSystemVersion": 1
 }
