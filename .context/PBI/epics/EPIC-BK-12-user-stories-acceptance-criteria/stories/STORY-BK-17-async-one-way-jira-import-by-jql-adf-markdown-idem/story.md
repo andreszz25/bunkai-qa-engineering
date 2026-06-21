@@ -3,7 +3,7 @@
 **Jira Key:** [BK-17](https://jira.upexgalaxy.com/browse/BK-17)
 **Epic:** [BK-12](https://jira.upexgalaxy.com/browse/BK-12) (User Stories & Acceptance Criteria)
 **Type:** Story
-**Status:** Ready For QA
+**Status:** QA Approved
 **Priority:** Medium
 **Story Points:** 5
 
@@ -85,17 +85,31 @@ The user opens Project settings, picks ***Import from Jira***, enters a JQL, and
 
 > Each rich-text field is a separate file in this folder.
 
+- [Acceptance Criteria](./acceptance-criteria.md)
 - [Out Of Scope](./out-of-scope.md)
 - [Implementation Plan (Dev)](./implementation-plan.md)
-- [Acceptance Test Plan (QA)](./acceptance-test-plan.md)
 - [Acceptance Test Results (QA)](./acceptance-test-results.md)
+
+---
+
+## Traceability
+
+### Bugs (2)
+
+- [BK-84](https://jira.upexgalaxy.com/browse/BK-84): [Staging] PAT bearer auth rejected on member/owned-resource routes (Imports, Projects, Modules, Tokens) — requireAuth middleware regression _(Closed)_
+- [BK-142](https://jira.upexgalaxy.com/browse/BK-142): [BK-17] Staging Jira import fails instantly with jira_unauthorized — ATLASSIAN_* credentials not configured in staging deployment _(Closed)_
+
+### Storys (2)
+
+- [BK-14](https://jira.upexgalaxy.com/browse/BK-14): TMS-US | Manage user stories anchored to a module _(Ready For QA)_
+- [BK-15](https://jira.upexgalaxy.com/browse/BK-15): TMS-AC | Manage criteria under a user story _(QA Approved)_
 
 ---
 
 ## Metadata
 
 - **Created:** 5/20/2026
-- **Updated:** 6/7/2026
+- **Updated:** 6/21/2026
 - **Reporter:** Ely
 - **Assignee:** Andrés Daniel Cumare Morales
 - **Labels:** integration, jira-import, mvp, shift-left-2026-05-27, shift-left-reviewed, wave-2

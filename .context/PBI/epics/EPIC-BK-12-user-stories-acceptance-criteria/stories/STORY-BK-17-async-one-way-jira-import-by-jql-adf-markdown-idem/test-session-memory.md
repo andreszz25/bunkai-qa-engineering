@@ -47,10 +47,10 @@ As a Project lead, pull a batch of Jira issues into Bunkai by JQL, with idempote
 - Data hygiene: ~33 leftover "BK9 Integration <timestamp>" workspaces under the active user — test-automation residue, not import-related, noted but not actionable for this session.
 
 ## Session State
-- Session Start: in_progress (2026-06-07)
+- Session Start: completed (2026-06-07)
 - Stage 1: completed (ATP authored, 22 outlines)
-- Stage 2: BLOCKED — smoke FAIL (TC-POS-01), 2026-06-15. Blocker confirmed across 6 retests over 84min, filed as **BK-142** (Critical, Blocks BK-17). BK-17 transitioned `In Test` -> `BLOCKED` (transition id 13, "defect reported"). Comment posted on BK-17. 1/22 outlines executed (TC-POS-01, FAILED, blocking).
-- Stage 3: pending (resumes once BK-142 resolved)
+- Stage 2: completed (2026-06-21). 20/22 TCs executed, 2 DEFERRED (TC-POS-03 data, TC-POS-05 UI). 0 bugs. BK-142 retest PASSED, closed.
+- Stage 3: completed (2026-06-21). ATR posted, QA comment posted, BK-17 transitioned `In Test` → `QA Approved`.
 
 ## Stage 2 — Execution
 
@@ -146,6 +146,20 @@ BK-84 fix (commit `226fc9d`, ADR-0001 unified auth gateway) verified on staging 
 | `POST /workspaces/{id}/projects {}` | 401 | 422 `validation_failed` |
 
 No 401s on any route. Auth gate passes; the original 22-outline ATP execution can proceed using project_id `ae10a3bd-574f-4caf-8076-f19a8e80f5a6` (BK-9 Module Test Project, workspace BK-9 QA Testing). BK-84 closed via `ReTest Passed`, retest comment posted. BK-17 comment posted noting blocker resolved.
+
+## BK-142 Retest — 2026-06-21 — GO
+
+Staging `ATLASSIAN_*` credentials confirmed working. Retest:
+
+| Step | Action | Result |
+|---|---|---|
+| Auth | `POST /auth/signin` → fresh PAT `bk_pat_3GxuZ7OO...` | 200 OK |
+| POST | `POST /imports {project_id: "ae10a3bd-...", jql: "key in (BK-8, BK-9)"}` | 202 `{import_job_id: "88cb5749-...", status: "queued"}` |
+| Poll | `GET /imports/88cb5749-...` (t+5s) | `{status: "completed", imported_count: 2, created_count: 2, updated_count: 0, errors: []}` |
+
+Zero `jira_unauthorized`. 10+ day regression window (2026-06-09 to 2026-06-21) closed. BK-142 transitioned `Ready For QA` → `Closed` (ReTest Passed). BK-17 unblock comment posted. Stage 2 resumes.
+
+**Note:** This import created 2 stories in project "BK-9 Module Test Project" (`ae10a3bd-...`). These can serve as baseline for AC2 idempotency test (re-run same JQL → `created_count: 0, updated_count: 2`).
 
 ## Smoke Test Verdict — 2026-06-07T13:53Z — NO-GO (BLOCKING)
 
