@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "generatedAt": "2026-06-10T09:11:04.123Z",
+  "generatedAt": "2026-07-29T09:14:14.238Z",
   "components": {
     "api": [
       {
@@ -21,46 +21,34 @@
         ]
       },
       {
-        "name": "ExampleApi",
-        "file": "ExampleApi.ts",
-        "relativePath": "tests/components/api/ExampleApi.ts",
+        "name": "OAuthApi",
+        "file": "OAuthApi.ts",
+        "relativePath": "tests/components/api/OAuthApi.ts",
         "atcs": [
           {
-            "id": "PROJ-101",
-            "method": "createResourceSuccessfully",
-            "line": 57
+            "id": "TC-10",
+            "method": "rejectOAuthCallbackWithMismatchedState",
+            "line": 93
           },
           {
-            "id": "PROJ-102",
-            "method": "createResourceWithInvalidData",
-            "line": 88
+            "id": "TC-11",
+            "method": "rejectOAuthCallbackWithMissingCode",
+            "line": 80
           },
           {
-            "id": "PROJ-103",
-            "method": "getResourceSuccessfully",
-            "line": 113
+            "id": "TC-12",
+            "method": "rejectOAuthCallbackWithInvalidCode",
+            "line": 130
+          },
+          {
+            "id": "TC-13",
+            "method": "rejectOAuthCallbackWithStaleState",
+            "line": 111
           }
         ]
       }
     ],
     "ui": [
-      {
-        "name": "ExamplePage",
-        "file": "ExamplePage.ts",
-        "relativePath": "tests/components/ui/ExamplePage.ts",
-        "atcs": [
-          {
-            "id": "PROJ-101",
-            "method": "submitFormWithValidData",
-            "line": 99
-          },
-          {
-            "id": "PROJ-102",
-            "method": "submitFormWithInvalidEmail",
-            "line": 122
-          }
-        ]
-      },
       {
         "name": "LoginPage",
         "file": "LoginPage.ts",
@@ -75,6 +63,11 @@
             "id": "PROJ-102",
             "method": "loginWithInvalidCredentials",
             "line": 101
+          },
+          {
+            "id": "TC-27",
+            "method": "verifyOAuthButtonsEnabledWithUpdatedCopy",
+            "line": 119
           }
         ]
       }
@@ -82,10 +75,10 @@
   },
   "preconditions": [],
   "summary": {
-    "totalComponents": 4,
+    "totalComponents": 3,
     "totalATCs": 9,
     "apiComponents": 2,
-    "uiComponents": 2,
+    "uiComponents": 1,
     "preconditionModules": 0
   }
 }
