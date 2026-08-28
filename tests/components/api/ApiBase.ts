@@ -25,6 +25,8 @@ export interface RequestOptions {
   headers?: Record<string, string>
   params?: Record<string, string>
   timeout?: number
+  /** Max redirects to follow (0 = don't follow, inspect the raw 3xx + Location header instead) */
+  maxRedirects?: number
 }
 
 // ============================================
@@ -139,13 +141,15 @@ export class ApiBase extends TestContext {
     endpoint: string,
     options: RequestOptions = {},
   ): Promise<[APIResponse, TBody]> {
-    const url = this.apiEndpoint(endpoint);
+    // Support absolute URLs (for endpoints outside /api/, e.g. web-app routes)
+    const url = endpoint.startsWith('http') ? endpoint : this.apiEndpoint(endpoint);
     const headers = this.buildHeaders(options.headers);
 
     const response = await this.request.get(url, {
       headers,
       params: options.params,
       timeout: options.timeout ?? this.config.browser.defaultTimeout,
+      maxRedirects: options.maxRedirects,
     });
 
     const body = await this.getResponseJsonObject<TBody>(response);

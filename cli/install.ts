@@ -9,7 +9,7 @@
  *     1-repo-verify     Verify repo root (package.json name / installer.lock.json)
  *     2-gentle-ai-detect  Detect gentle-ai (presence + version)
  *     3-gentle-ai-install gentle-ai install / skip decision
- *     4-agent-detect    Detect agents (Claude Code / OpenCode) and prompt selection
+ *     4-agent-detect    Detect agents (Claude Code / OpenCode / Codex) and prompt selection
  *
  *   PHASE 2 — INSTALLATION
  *     5-deps-install    Install dependencies (`bun install`)
@@ -28,8 +28,9 @@
  *   PHASE 5 — INITIAL CONFIGURATION
  *     7-agents-setup    Run agents:setup (.agents/project.yaml populator)
  *     12.4-acli-auth    Atlassian credentials + acli session login
- *     13-jira-sync-fields  Jira auth loop + `bun run jira:sync-fields`
- *     13b-jira-sync-workflows  `bun run jira:sync-workflows`
+ *     13-jira-sync        Catalog-source prompt (own / upex / skip) → fields +
+ *                         workflows + link-types sync; empty {} placeholders for
+ *                         any catalog still missing (anti STALE-PATH)
  *     14-jira-check     `bun run jira:check`
  *
  * Idempotency: each step writes an ISO timestamp to state.steps[<key>] on success.
@@ -48,7 +49,7 @@
  *   bun run setup --validate-skills
  *
  * Non-interactive env vars:
- *   INSTALL_AGENTS=claude-code,opencode   Comma-list of agents to configure
+ *   INSTALL_AGENTS=claude-code,opencode,codex   Comma-list of agents to configure
  *   INSTALL_SKIP_GENTLE_AI=1              Treat gentle-ai as skipped
  *   INSTALL_SKIP_DEPS=1                   Skip `bun install`
  *   INSTALL_SKIP_PLAYWRIGHT=1             Skip `bun run pw:install`
@@ -70,15 +71,26 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
 import { checkbox, password } from '@inquirer/prompts';
+import {
+  checkAgentCompatibility,
+  repairClaudeSkillsAlias,
+  repairCommandWrappers,
+} from './lib/agent-compatibility.ts';
+import {
+  resolveAtlassianInstance,
+  toSiteSlug,
+  writeAtlassianUrlToYaml,
+} from './lib/atlassian-instance.ts';
+import { playwrightBrowsersInstalled } from './lib/playwright-cache.ts';
 import * as tui from './lib/tui.ts';
 import { runVariablesFlow } from './lib/variables-flow.ts';
-import { criticalVars, nonCriticalVars, varsFor } from './lib/variables-manifest.ts';
+import { criticalVars, nonCriticalVars, valueSourceOf, varsFor } from './lib/variables-manifest.ts';
 
 // ============================================================================
 // Types
 // ============================================================================
 
-type AgentId = 'claude-code' | 'opencode';
+export type AgentId = 'claude-code' | 'opencode' | 'codex';
 
 type InstallStatus = 'installed' | 'skipped' | 'failed';
 
@@ -93,9 +105,11 @@ interface GentleAiInfo {
   status: 'installed' | 'missing' | 'skipped' | 'incompatible'
 }
 
-interface AgentDetection {
+export interface AgentDetection {
   claudeCode: boolean
   opencode: boolean
+  codexCli: boolean
+  codexConfigured: boolean
 }
 
 interface OptionalBootstrapStatus {
@@ -162,6 +176,7 @@ const REPO_ROOT = resolve(import.meta.dir, '..');
 const STATE_PATH = join(REPO_ROOT, '.template', 'installer.state.json');
 const CLAUDE_MCP_PATH = join(REPO_ROOT, '.mcp.json');
 const OPENCODE_CONFIG_PATH = join(REPO_ROOT, 'opencode.jsonc');
+const CODEX_CONFIG_PATH = join(REPO_ROOT, '.codex', 'config.toml');
 const ENV_PATH = join(REPO_ROOT, '.env');
 const ENV_EXAMPLE_PATH = join(REPO_ROOT, '.env.example');
 
@@ -179,7 +194,7 @@ const ENGRAM_COMPONENT = 'engram';
  * test-automation, test-documentation, regression-testing) already provide
  * Plan → Code → Verify natively. SDD-* skills target software-design workflows
  * (specs, archives, strict TDD) that don't apply to E2E/API test authoring.
- * The vendored `judgment-day` skill (committed under .claude/skills/) provides
+ * The vendored `judgment-day` skill (committed under .agents/skills/) provides
  * adversarial dual-review without needing the SDD bundle.
  *
  * If you want the full SDD suite for `/framework-development` framework
@@ -210,6 +225,17 @@ const EXTERNAL_CLIS: ReadonlyArray<{ name: string, install?: string, docs: strin
     name: 'gh',
     docs: 'https://github.com/cli/cli#installation',
     purpose: 'GitHub CLI — repos, PRs, releases, gh api',
+  },
+  {
+    // Both permission allowlists already grant `Bash(rg *)`, and agents reach for it
+    // constantly. Claude Code ships its own copy, so this never surfaced there — but
+    // OpenCode and Codex fall through to the system binary, and a downstream user hit
+    // exactly that while running /git-flow-master. Declaring it is the point of
+    // supporting three harnesses.
+    name: 'rg',
+    install: 'brew install ripgrep   # or: apt install ripgrep · winget install BurntSushi.ripgrep.MSVC',
+    docs: 'https://github.com/BurntSushi/ripgrep#installation',
+    purpose: 'ripgrep — fast repo search. Bundled with Claude Code; OpenCode and Codex use the system binary',
   },
   {
     // Promoted to the sole default tool for Jira/Confluence/TMS work
@@ -245,15 +271,32 @@ interface CommunitySkill {
   skill?: string // omit or '*' to install all skills from the package
 }
 
+export function buildCommunitySkillArgs(
+  item: CommunitySkill,
+  level: 'project' | 'global',
+  agents: AgentId[],
+): string[] {
+  const args = ['skills', 'add', item.package];
+  if (item.skill && item.skill !== '*') { args.push('--skill', item.skill); }
+  if (level === 'global') {
+    args.push('--global');
+    for (const agent of agents) { args.push('--agent', agent); }
+  }
+  args.push('--yes');
+  return args;
+}
+
+export const PROJECT_SKILL_DESTINATION = '.agents/skills';
+
 /**
  * Community skills installed at PROJECT level (`bunx skills add`).
  * Hosts third-party skills that are critical to this QA stack. They land in
- * .claude/skills/ alongside our committed skills — the boilerplate scaffolds
+ * .agents/skills/ alongside our committed skills — the boilerplate scaffolds
  * the full skill set into the consumer repo, so a fresh clone has everything
  * needed. Skills authored by us (sprint-testing, test-automation,
  * agentic-qa-core, project-discovery, regression-testing, test-documentation,
  * agentic-qa-onboard, acli, xray-cli, git-flow-master) live committed under
- * .claude/skills/ and are NOT listed here.
+ * .agents/skills/ and are NOT listed here.
  */
 const PROJECT_LEVEL_SKILLS: ReadonlyArray<CommunitySkill> = [
   // playwright-cli (Microsoft): browser automation CLI used by /sprint-testing
@@ -263,7 +306,7 @@ const PROJECT_LEVEL_SKILLS: ReadonlyArray<CommunitySkill> = [
   // fixtures reference loaded by /test-automation during the Code phase.
   { package: 'https://github.com/currents-dev/playwright-best-practices-skill', skill: 'playwright-best-practices' },
   // resend-cli (resend.com): email testing flows. Pairs with the `resend`
-  // external CLI verified in step 11 — see CLAUDE.md §6.5 CLI→Skill auto-load.
+  // external CLI verified in step 11 — see AGENTS.md §6.5 CLI→Skill auto-load.
   // Project-level because email provider choice varies per project.
   { package: 'https://github.com/resend/resend-skills', skill: 'resend-cli' },
 ];
@@ -283,9 +326,10 @@ const USER_LEVEL_SKILLS: ReadonlyArray<CommunitySkill> = [
   { package: 'https://github.com/obra/superpowers', skill: 'brainstorming' },
   { package: 'https://github.com/lewislulu/html-ppt-skill', skill: 'html-ppt' },
   { package: 'https://bun.sh/docs', skill: 'bun' },
-  // Cross-project human-in-the-loop feedback CLI (`toki`): a blocking browser UI
-  // the AI drives mid-conversation to collect structured, anchored answers.
-  { package: 'https://github.com/upex-galaxy/agentic-user-skills', skill: 'wokitoki' },
+  // Cross-project decision-deck CLI (`mkd`, Make Decision): the AI writes a spec
+  // of items (decision / question / report / table) and the user answers in a
+  // browser deck, pasting the Result JSON back into the chat (non-blocking).
+  { package: 'https://github.com/upex-galaxy/agentic-user-skills', skill: 'mkd' },
 ];
 
 // Matches Claude Code ${VAR} and ${VAR:-default} placeholders in .mcp.json.
@@ -305,7 +349,7 @@ const MCP_SERVER_SECRETS: Record<string, readonly string[]> = {
   tavily: ['TAVILY_API_KEY'],
   playwright: [],
   dbhub: ['DBHUB_HOST', 'DBHUB_DATABASE', 'DBHUB_USER', 'DBHUB_PASSWORD'],
-  openapi: ['API_BASE_URL', 'OPENAPI_SPEC_PATH', 'API_TOKEN'],
+  openapi: ['API_BASE_URL', 'OPENAPI_SPEC_PATH'],
   postman: ['POSTMAN_API_KEY'],
 };
 
@@ -316,7 +360,6 @@ const MCP_SERVER_SECRETS: Record<string, readonly string[]> = {
 const INSTALLER_DEFERRED_VARS = new Set<string>([
   'API_BASE_URL',
   'OPENAPI_SPEC_PATH',
-  'API_TOKEN',
   'POSTMAN_API_KEY',
   'DBHUB_HOST',
   'DBHUB_DATABASE',
@@ -366,9 +409,9 @@ const SKIP_PLAYWRIGHT = process.env.INSTALL_SKIP_PLAYWRIGHT === '1';
 const SKIP_AGENTS_SETUP = process.env.INSTALL_SKIP_AGENTS_SETUP === '1';
 const FORCE_AGENTS_SETUP = process.env.INSTALL_FORCE_AGENTS_SETUP === '1';
 const FORCE_GENTLE_AI = process.env.INSTALL_FORCE_GENTLE_AI === '1';
-// --sync-skills: standalone repair mode — re-installs community skills targeting
-// the selected agent(s) so they land in each agent's own skills dir (e.g. Claude
-// Code's `.claude/skills/`). Implies a forced community re-run.
+// --sync-skills: standalone repair mode. Re-installs project community skills
+// into `.agents/skills/` and global community skills into each selected
+// harness's user-level store. Implies a forced community re-run.
 const SYNC_SKILLS = process.argv.includes('--sync-skills');
 const FORCE_COMMUNITY = process.env.INSTALL_FORCE_COMMUNITY === '1' || SYNC_SKILLS;
 const FORCE_GITHUB = process.env.INSTALL_FORCE_GITHUB === '1';
@@ -594,36 +637,54 @@ async function handleMissingGentleAi(): Promise<'show-and-exit' | 'skip'> {
 // Phase 1 — Step 4 (4-agent-detect): detect agents
 // ============================================================================
 
-async function detectAgents(): Promise<AgentDetection> {
-  const claudePath = join(homedir(), '.claude');
-  const opencodePath = join(homedir(), '.config', 'opencode');
+export async function detectAgents(options: {
+  home?: string
+  root?: string
+  binaryExists?: (binary: string) => boolean
+} = {}): Promise<AgentDetection> {
+  const home = options.home ?? homedir();
+  const root = options.root ?? REPO_ROOT;
+  const binaryExists = options.binaryExists ?? (binary => which(binary) !== null);
+  const claudePath = join(home, '.claude');
+  const opencodePath = join(home, '.config', 'opencode');
 
-  const [claude, opencode] = await Promise.all([
-    stat(claudePath).then(
-      s => s.isDirectory(),
-      () => false,
-    ),
-    stat(opencodePath).then(
-      s => s.isDirectory(),
-      () => false,
-    ),
+  const [claudeDirectory, opencodeDirectory] = await Promise.all([
+    stat(claudePath).then(s => s.isDirectory(), () => false),
+    stat(opencodePath).then(s => s.isDirectory(), () => false),
   ]);
 
-  return { claudeCode: claude, opencode };
+  return {
+    claudeCode: claudeDirectory || binaryExists('claude'),
+    opencode: opencodeDirectory || binaryExists('opencode'),
+    codexCli: binaryExists('codex'),
+    codexConfigured: existsSync(join(root, '.codex', 'config.toml')),
+  };
 }
 
-function parseAgentsEnv(): AgentId[] | null {
-  const raw = process.env.INSTALL_AGENTS;
+export function parseAgentsEnv(raw = process.env.INSTALL_AGENTS): AgentId[] | null {
   if (!raw) { return null; }
   const parts = raw.split(',').map(s => s.trim()).filter(Boolean);
-  const valid: AgentId[] = [];
+  const valid = new Set<AgentId>();
   for (const p of parts) {
-    if (p === 'claude-code' || p === 'opencode') { valid.push(p); }
+    if (p === 'claude-code' || p === 'opencode' || p === 'codex') { valid.add(p); }
   }
-  return valid;
+  return [...valid];
 }
 
 async function promptAgentSelection(detected: AgentDetection): Promise<AgentId[]> {
+  // A validation, not a prompt — it must run in both modes. Skipping it in
+  // non-interactive mode would let the installer proceed with zero agents and
+  // silently configure nothing.
+  const codexAvailable = detected.codexCli || detected.codexConfigured;
+  if (!detected.claudeCode && !detected.opencode && !codexAvailable) {
+    log.error('No agent executable or Codex repository configuration detected.');
+    log.dim('  Claude Code: https://docs.claude.com/en/docs/claude-code');
+    log.dim('  OpenCode:    https://opencode.ai/docs');
+    log.dim('  Codex:       https://developers.openai.com/codex/');
+    log.dim('  Then re-run: bun run setup');
+    process.exit(1);
+  }
+
   if (NON_INTERACTIVE) {
     const fromEnv = parseAgentsEnv();
     if (fromEnv && fromEnv.length > 0) { return fromEnv; }
@@ -631,34 +692,24 @@ async function promptAgentSelection(detected: AgentDetection): Promise<AgentId[]
     const out: AgentId[] = [];
     if (detected.claudeCode) { out.push('claude-code'); }
     if (detected.opencode) { out.push('opencode'); }
+    if (codexAvailable) { out.push('codex'); }
     return out;
   }
 
-  if (!detected.claudeCode && !detected.opencode) {
-    log.error('No agents detected. Install Claude Code or OpenCode and re-run.');
-    log.dim('  Claude Code: https://docs.claude.com/en/docs/claude-code');
-    log.dim('  OpenCode:    https://opencode.ai/docs');
-    log.dim('  Then re-run: bun run setup');
-    process.exit(1);
-  }
-
-  if (detected.claudeCode && !detected.opencode) {
-    const ok = await tui.confirm({ message: 'Detected Claude Code. Configure for it?', initialValue: true });
-    if (tui.isCancel(ok)) { throw Object.assign(new Error('Aborted by user.'), { name: 'ExitPromptError' }); }
-    return ok ? ['claude-code'] : [];
-  }
-
-  if (detected.opencode && !detected.claudeCode) {
-    const ok = await tui.confirm({ message: 'Detected OpenCode. Configure for it?', initialValue: true });
-    if (tui.isCancel(ok)) { throw Object.assign(new Error('Aborted by user.'), { name: 'ExitPromptError' }); }
-    return ok ? ['opencode'] : [];
-  }
-
   const selected = await checkbox<AgentId>({
-    message: 'Detected both agents. Which to configure?',
+    message: 'Which detected/configured agents should this repository support?',
     choices: [
-      { name: 'Claude Code', value: 'claude-code', checked: true },
-      { name: 'OpenCode', value: 'opencode', checked: true },
+      ...(detected.claudeCode ? [{ name: 'Claude Code (executable/config found)', value: 'claude-code' as const, checked: true }] : []),
+      ...(detected.opencode ? [{ name: 'OpenCode (executable/config found)', value: 'opencode' as const, checked: true }] : []),
+      ...(codexAvailable
+        ? [{
+            name: detected.codexCli
+              ? 'Codex (CLI found; Desktop uses the same repository config)'
+              : 'Codex Desktop target (repository configured; CLI not found)',
+            value: 'codex' as const,
+            checked: true,
+          }]
+        : []),
     ],
     required: true,
   });
@@ -672,24 +723,6 @@ async function promptAgentSelection(detected: AgentDetection): Promise<AgentId[]
 
 function nodeModulesLooksReady(): boolean {
   return existsSync(join(REPO_ROOT, 'node_modules', '@playwright', 'test'));
-}
-
-// Playwright caches downloaded browsers in a per-OS directory. Detect any of
-// the documented locations as a proxy for "browsers installed". This avoids
-// spawning `bunx playwright --version` (which only verifies the package, not
-// the browsers themselves).
-function playwrightBrowsersInstalled(): boolean {
-  const overrides = [
-    process.env.PLAYWRIGHT_BROWSERS_PATH,
-  ].filter((p): p is string => Boolean(p) && p !== '0');
-  const home = homedir();
-  const candidates = [
-    ...overrides,
-    join(home, '.cache', 'ms-playwright'),
-    join(home, 'Library', 'Caches', 'ms-playwright'),
-    join(home, 'AppData', 'Local', 'ms-playwright'),
-  ];
-  return candidates.some(p => existsSync(p));
 }
 
 async function runDepsInstall(state: InstallState, forceKeys: Set<string>): Promise<void> {
@@ -894,24 +927,11 @@ async function installCommunitySkills(
       log.dim(`  skipping ${slug} (already installed)`);
       continue;
     }
-    // Install into each selected agent's skills directory via `--agent`. Claude
-    // Code only discovers skills under `.claude/skills/` (plus ~/.claude/skills/,
-    // plugins, and --add-dir) — it NEVER scans `.agents/skills/`. Without an
-    // explicit `--agent`, `bunx skills add` writes only to `.agents/skills/` (the
-    // agent-agnostic store read by Copilot/OpenCode/Warp), so the skills stay
-    // invisible to Claude Code. Passing the selected agents lands each skill where
-    // that agent actually loads it.
-    const args = ['skills', 'add', item.package];
-    if (item.skill && item.skill !== '*') {
-      args.push('--skill', item.skill);
-    }
-    if (level === 'global') {
-      args.push('--global');
-    }
-    for (const agent of agents) {
-      args.push('--agent', agent);
-    }
-    args.push('--yes');
+    // Project skills install once into the canonical `.agents/skills/` store.
+    // Claude discovers that same tree through the generated `.claude/skills`
+    // alias. Global skills remain harness-specific, so only that level receives
+    // one `--agent` argument per selected agent.
+    const args = buildCommunitySkillArgs(item, level, agents);
 
     const s = tui.spinner();
     s.start(`Installing ${slug}…`);
@@ -950,16 +970,41 @@ function stripJsoncComments(input: string): string {
     .replace(/^\s*\/\/.*$/gm, '');
 }
 
-async function discoverRequiredEnvVars(agents: AgentId[]): Promise<string[]> {
+function collectCodexMcpEnvVars(value: unknown, seen: Set<string>): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) { collectCodexMcpEnvVars(entry, seen); }
+    return;
+  }
+  if (!value || typeof value !== 'object') { return; }
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === 'bearer_token_env_var' && typeof entry === 'string') { seen.add(entry); }
+    else if (key === 'env_vars' && Array.isArray(entry)) {
+      for (const name of entry) { if (typeof name === 'string') { seen.add(name); } }
+    }
+    else { collectCodexMcpEnvVars(entry, seen); }
+  }
+}
+
+export async function discoverRequiredEnvVars(
+  agents: AgentId[],
+  root = REPO_ROOT,
+): Promise<string[]> {
   const seen = new Set<string>();
-  if (agents.includes('claude-code') && existsSync(CLAUDE_MCP_PATH)) {
-    const content = await readFile(CLAUDE_MCP_PATH, 'utf8');
+  const claudeMcpPath = root === REPO_ROOT ? CLAUDE_MCP_PATH : join(root, '.mcp.json');
+  const openCodeConfigPath = root === REPO_ROOT ? OPENCODE_CONFIG_PATH : join(root, 'opencode.jsonc');
+  const codexConfigPath = root === REPO_ROOT ? CODEX_CONFIG_PATH : join(root, '.codex', 'config.toml');
+  if (agents.includes('claude-code') && existsSync(claudeMcpPath)) {
+    const content = await readFile(claudeMcpPath, 'utf8');
     for (const m of content.matchAll(MCP_VAR_PATTERN)) { seen.add(m[1]); }
   }
-  if (agents.includes('opencode') && existsSync(OPENCODE_CONFIG_PATH)) {
-    const raw = await readFile(OPENCODE_CONFIG_PATH, 'utf8');
+  if (agents.includes('opencode') && existsSync(openCodeConfigPath)) {
+    const raw = await readFile(openCodeConfigPath, 'utf8');
     const content = stripJsoncComments(raw);
     for (const m of content.matchAll(OPENCODE_VAR_PATTERN)) { seen.add(m[1]); }
+  }
+  if (agents.includes('codex') && existsSync(codexConfigPath)) {
+    const parsed = Bun.TOML.parse(await readFile(codexConfigPath, 'utf8'));
+    collectCodexMcpEnvVars(parsed, seen);
   }
   return [...seen].sort();
 }
@@ -1138,7 +1183,8 @@ async function configureMcps(agents: AgentId[], state: InstallState): Promise<vo
 //
 // The installer prompts ONLY for the CRITICAL set (manifest `critical: true`),
 // identical across both boilerplates:
-//   - ATLASSIAN_URL / ATLASSIAN_EMAIL / ATLASSIAN_API_TOKEN — Jira/acli tool
+//   - ATLASSIAN_EMAIL / ATLASSIAN_API_TOKEN — Jira/acli credentials (.env)
+//   - ATLASSIAN_URL — the Jira/acli SITE HOST, persisted to .agents/project.yaml
 //   - RESEND_API_KEY — email-testing tool (also authenticates the resend CLI)
 //   - TAVILY_API_KEY — the pre-configured Tavily web-search MCP
 // These exist independent of any project-under-test, so a fresh clone can
@@ -1154,6 +1200,14 @@ async function configureMcps(agents: AgentId[], state: InstallState): Promise<vo
 // Vars without an entry are prompted with just their name.
 const CRITICAL_VAR_NOTES: Record<string, { title: string, body: string }> = {
   ATLASSIAN_URL: {
+    title: 'Atlassian site host (Jira / acli)',
+    body: 'e.g. https://your-org.atlassian.net\n'
+      + 'Stored in .agents/project.yaml (versioned), NOT in .env — it is project\n'
+      + 'identity, and a stale copy in .env silently pointed the sync scripts and\n'
+      + 'the Jira-Direct TMS provider at a dead site. Read it back any time with\n'
+      + '`bun run --silent jira:url`.',
+  },
+  ATLASSIAN_EMAIL: {
     title: 'Atlassian credentials (Jira / acli)',
     body: 'Used by acli + scripts/sync-jira-*.ts. Get a token at: https://id.atlassian.com/manage-profile/security/api-tokens',
   },
@@ -1189,6 +1243,44 @@ async function configureDayZeroCredentials(state: InstallState): Promise<void> {
   // ── CRITICAL tool credentials (idempotent, project-independent) ──────────
   for (const spec of criticalVars()) {
     const name = spec.name;
+
+    // A var sourced outside `.env` is asked for here like any other, but
+    // PERSISTED to its own home. ATLASSIAN_URL goes to `.agents/project.yaml`:
+    // it is a public hostname and project identity, and while it lived in `.env`
+    // a stale copy inherited from the parent shell shadowed the file in silence.
+    if (valueSourceOf(spec) === 'atlassian-instance') {
+      let existing: string | null = null;
+      try { existing = resolveAtlassianInstance().baseUrl; }
+      catch { existing = null; }
+
+      if (existing !== null) {
+        log.dim(`  ${name}: already set (${existing}).`);
+        continue;
+      }
+      if (NON_INTERACTIVE) {
+        log.warn(
+          `${name}: the Atlassian host is not set in .agents/project.yaml and non-interactive mode `
+          + 'cannot prompt. Jira steps will be skipped — fix with `bun run agents:setup`.',
+        );
+        continue;
+      }
+      const noteInfo = CRITICAL_VAR_NOTES[name];
+      if (noteInfo) { tui.note(noteInfo.body, noteInfo.title); }
+      const value = await promptForVar(name);
+      if (value.length === 0) {
+        log.warn('  Atlassian host left empty — Jira steps will be skipped. Set it later with `bun run agents:setup`.');
+        continue;
+      }
+      try {
+        const written = writeAtlassianUrlToYaml(value);
+        log.dim(`  ${name} → .agents/project.yaml (${written}).`);
+      }
+      catch (err) {
+        log.warn(`  Could not write the Atlassian host: ${(err as Error).message}`);
+      }
+      continue;
+    }
+
     const fromFile = (envValues[name] ?? '').trim();
     const fromProcess = (process.env[name] ?? '').trim();
     if (fromFile.length > 0 || fromProcess.length > 0) {
@@ -1237,7 +1329,7 @@ async function configureDayZeroCredentials(state: InstallState): Promise<void> {
       log.dim('  resend CLI not installed — skipping auto-login. Install: npm i -g resend-cli');
     }
     else {
-      const loginRes = spawnSync('resend', ['login', '--api-key', resendToken], {
+      const loginRes = spawnSync('resend', ['login', '--key', resendToken], {
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout: 10000,
       });
@@ -1317,7 +1409,7 @@ async function offerDirenvAutoload(): Promise<void> {
 
   if (!info.installed) {
     log.info('direnv not installed (optional).');
-    log.dim('  Launch agents with: bun claude  /  bun opencode  (dotenv-cli loads .env automatically).');
+    log.dim('  Launch agents with: bun claude  /  bun opencode  /  bun codex  (dotenv-cli loads .env automatically).');
     log.dim(`  Or install direnv for shell autoload: ${installHintForPlatform()}`);
     return;
   }
@@ -1331,7 +1423,7 @@ async function offerDirenvAutoload(): Promise<void> {
     true,
   );
   if (!proceed) {
-    log.dim('  Skipped. Launch agents with: bun claude  /  bun opencode.');
+    log.dim('  Skipped. Launch agents with: bun claude  /  bun opencode  /  bun codex.');
     return;
   }
   const result = tryRun('direnv', ['allow', REPO_ROOT]);
@@ -1340,7 +1432,7 @@ async function offerDirenvAutoload(): Promise<void> {
     log.dim(`  Reminder: add this to your shell rc if not already done: ${shellHookHint(info)}`);
   }
   else {
-    log.warn('direnv allow failed. Launch agents with: bun claude  /  bun opencode.');
+    log.warn('direnv allow failed. Launch agents with: bun claude  /  bun opencode  /  bun codex.');
     log.dim(`  ${(result.stderr || result.stdout).trim().slice(0, 200)}`);
   }
 }
@@ -1388,9 +1480,10 @@ function sanitizeRepoName(name: string): string {
 // ============================================================================
 
 /**
- * Offer to run `bun run api:login` to populate API_TOKEN in .env so the
- * OpenAPI MCP server can authenticate against the target backend. This
- * accelerates MCP-driven API testing and exploration after install.
+ * Offer to run `bun run api:login` to mint a session token into
+ * `.auth/tokens.env` (sourceable) for curl-based agentic API testing. The
+ * token is NOT injected into the OpenAPI MCP (which is schema-read-only) — it
+ * is used to execute authenticated requests via curl after install.
  */
 async function optionalApiBootstrap(state: InstallState, forceKeys: Set<string>): Promise<void> {
   const key = '12-api-bootstrap';
@@ -1664,11 +1757,18 @@ function verifyExternalClis(state: InstallState): CliResult[] {
 // State persistence
 // ============================================================================
 
+export function migrateAgentIds(value: unknown): AgentId[] {
+  if (!Array.isArray(value)) { return []; }
+  return [...new Set(value.filter((agent): agent is AgentId =>
+    agent === 'claude-code' || agent === 'opencode' || agent === 'codex'))];
+}
+
 async function loadPriorState(): Promise<InstallState | null> {
   if (!existsSync(STATE_PATH)) { return null; }
   try {
     const raw = await readFile(STATE_PATH, 'utf8');
     const parsed = JSON.parse(raw) as InstallState;
+    parsed.agents = migrateAgentIds(parsed.agents);
     // Back-fill postInstall for state files written before this field existed.
     parsed.postInstall ??= {
       agentsSetup: 'pending',
@@ -1693,7 +1793,7 @@ async function writeInstallState(state: InstallState): Promise<void> {
   log.success(`Wrote ${STATE_PATH}`);
 }
 
-function buildInitialState(prior: InstallState | null): InstallState {
+export function buildInitialState(prior: InstallState | null): InstallState {
   if (prior && prior.version === 1) {
     // Ensure all sections exist on older state files (forward-compat).
     prior.steps ??= {};
@@ -1737,6 +1837,7 @@ function buildInitialState(prior: InstallState | null): InstallState {
 
     return {
       ...prior,
+      agents: migrateAgentIds(prior.agents),
       steps: prior.steps,
       skills: prior.skills ?? {},
       mcps: prior.mcps ?? {},
@@ -1762,6 +1863,32 @@ function buildInitialState(prior: InstallState | null): InstallState {
       jiraCheck: 'pending',
     },
   };
+}
+
+export function launchCommandsForAgents(agents: AgentId[]): string[] {
+  return agents.map(agent => agent === 'claude-code' ? 'bun claude' : `bun ${agent}`);
+}
+
+function describeAgentDetection(detected: AgentDetection): string {
+  const codex = detected.codexCli
+    ? 'CLI found; Desktop uses repository config'
+    : detected.codexConfigured
+      ? 'repository configured for Desktop; CLI not found'
+      : 'not configured';
+  return `Claude Code: ${detected.claudeCode ? 'found' : 'not found'} | OpenCode: ${detected.opencode ? 'found' : 'not found'} | Codex: ${codex}`;
+}
+
+export function repairRepositoryCompatibility(
+  root = REPO_ROOT,
+  platform: NodeJS.Platform = process.platform,
+): { alias: ReturnType<typeof repairClaudeSkillsAlias>, wrappersWritten: number } {
+  const alias = repairClaudeSkillsAlias(root, platform);
+  const wrappersWritten = repairCommandWrappers(root);
+  const check = checkAgentCompatibility(root, platform);
+  if (!check.ok) {
+    throw new Error(`Agent compatibility repair incomplete:\n${check.errors.join('\n')}`);
+  }
+  return { alias, wrappersWritten };
 }
 
 // ============================================================================
@@ -1790,7 +1917,13 @@ export function reloadDotEnv(): void {
       if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith('\'') && v.endsWith('\''))) {
         v = v.slice(1, -1);
       }
-      // Don't overwrite an already-populated value with an empty one from .env.
+      // The FILE WINS over an inherited process value. This is deliberate and must
+      // not be "corrected" to the usual non-override dotenv default: a stale value
+      // inherited from whatever spawned this process (an agent session, a parent
+      // shell) would otherwise shadow a corrected `.env` in silence and survive an
+      // application restart. `bun run vars:env:check` guards the same class
+      // repo-wide; see `cli/lib/atlassian-instance.ts` for the incident this comes
+      // from. Only an EMPTY file value defers to an already-populated process value.
       if (k && (v !== '' || !process.env[k])) { process.env[k] = v; }
     }
   }
@@ -1800,17 +1933,20 @@ export function reloadDotEnv(): void {
 }
 
 /**
- * Interactive loop that checks Atlassian credentials (ATLASSIAN_URL /
- * ATLASSIAN_EMAIL / ATLASSIAN_API_TOKEN) and probes /rest/api/3/myself.
+ * Interactive loop that checks Atlassian access and probes /rest/api/3/myself.
+ * The HOST comes from `.agents/project.yaml`; only ATLASSIAN_EMAIL /
+ * ATLASSIAN_API_TOKEN are env vars.
  * Up to 5 attempts; lets the user skip at any time.
  */
 async function jiraAuthLoop(): Promise<'authenticated' | 'skipped'> {
   const probe = async (): Promise<{ ok: boolean, reason: string }> => {
-    const url = process.env.ATLASSIAN_URL;
+    let url: string | null = null;
+    try { url = resolveAtlassianInstance().baseUrl; }
+    catch { url = null; }
     const email = process.env.ATLASSIAN_EMAIL;
     const token = process.env.ATLASSIAN_API_TOKEN;
     const missing: string[] = [];
-    if (!url) { missing.push('ATLASSIAN_URL'); }
+    if (!url) { missing.push('issue_tracker.atlassian_url in .agents/project.yaml'); }
     if (!email) { missing.push('ATLASSIAN_EMAIL'); }
     if (!token) { missing.push('ATLASSIAN_API_TOKEN'); }
     if (missing.length > 0) {
@@ -1848,7 +1984,7 @@ async function jiraAuthLoop(): Promise<'authenticated' | 'skipped'> {
         [
           '1. Open .env in your editor.',
           '2. Set the three Atlassian variables:',
-          '     ATLASSIAN_URL=https://your-org.atlassian.net',
+          '     (the SITE HOST is not a .env var — set it with `bun run agents:setup`)',
           '     ATLASSIAN_EMAIL=your-email@example.com',
           '     ATLASSIAN_API_TOKEN=...',
           '     (Get a token at https://id.atlassian.com/manage-profile/security/api-tokens)',
@@ -1912,13 +2048,70 @@ function runJiraSyncCapturingMarker(
 }
 
 /**
+ * Print a one-line status for a Jira sync outcome. `own` adds a hint pointing
+ * at the `--upex` fallback when the user's own-workspace sync was skipped for
+ * lack of Administer permission.
+ */
+function reportJiraOutcome(
+  label: string,
+  outcome: 'completed' | 'failed' | 'skipped-no-admin',
+  own = false,
+): void {
+  if (outcome === 'completed') {
+    process.stdout.write(`${tui.statusIcon('ok')} ${label} completed\n`);
+  }
+  else if (outcome === 'skipped-no-admin') {
+    process.stdout.write(`${tui.statusIcon('warn')} ${label} skipped — your Jira user is not an Administrator.\n`);
+    process.stdout.write('  The bundled .agents catalog stays as-is (repo still works).\n');
+    if (own) {
+      process.stdout.write('  Tip: re-run with the UPEX standard catalog, e.g. bun run jira:sync-fields --upex\n');
+    }
+  }
+  else {
+    process.stdout.write(`${tui.statusIcon('fail')} ${label} failed. Continuing.\n`);
+  }
+}
+
+/**
+ * Jira catalog JSON files referenced by SKILL.md bodies. The lint-skills
+ * STALE-PATH check (ERROR severity) fails repo:check / the pre-push hook when
+ * any of these is missing on disk. The bootstrap scaffolder
+ * (packages/create-agentic-qa) deletes jira-fields.json + jira-workflows.json
+ * so a fresh project never inherits UPEX's cached catalogs — which leaves the
+ * SKILL.md path references dangling until the user runs a sync.
+ */
+const JIRA_CATALOG_PLACEHOLDERS = [
+  '.agents/jira-fields.json',
+  '.agents/jira-workflows.json',
+  '.agents/jira-link-types.json',
+] as const;
+
+/**
+ * Write an empty `{}` placeholder for any Jira catalog still missing on disk
+ * after the sync phase (skip, no-auth, no-admin, or a failed fetch). This:
+ *   - satisfies the STALE-PATH lint check (the file now exists), and
+ *   - is treated as "not yet populated" by sync-jira-*.ts, which only refuse to
+ *     overwrite a file that is NOT the empty `{}` placeholder — so a later
+ *     `bun run jira:sync-*` populates it cleanly without needing --force.
+ */
+async function ensureJiraCatalogPlaceholders(): Promise<void> {
+  for (const rel of JIRA_CATALOG_PLACEHOLDERS) {
+    const abs = join(REPO_ROOT, rel);
+    if (!existsSync(abs)) {
+      await writeFile(abs, '{}\n', 'utf8');
+      process.stdout.write(`${tui.statusIcon('ok')} Wrote empty placeholder ${rel} (run jira:sync-* to populate).\n`);
+    }
+  }
+}
+
+/**
  * PHASE 5 — INITIAL CONFIGURATION
  *
  * Steps:
  *   7-agents-setup        bun run agents:setup (.agents/project.yaml)
  *   12.4-acli-auth        Atlassian credentials + acli session login
- *   13-jira-sync-fields   jira auth loop + bun run jira:sync-fields
- *   13b-jira-sync-workflows bun run jira:sync-workflows
+ *   13-jira-sync          catalog-source prompt → fields + workflows + link
+ *                         types sync (own/upex/skip) + {} placeholder safety net
  *   14-jira-check         bun run jira:check
  *
  * NON_INTERACTIVE skips this entire phase cleanly — each step is marked
@@ -1966,7 +2159,14 @@ async function runInitialConfigurationPhase(state: InstallState): Promise<void> 
   // ── Step 12.4: Atlassian credentials & acli authentication ──────────────
   tui.section('Step 12.4: Atlassian credentials & acli authentication');
 
-  const MANUAL_ACLI_LOGIN = 'echo "$ATLASSIAN_API_TOKEN" | acli jira auth login --site "$ATLASSIAN_URL" --email "$ATLASSIAN_EMAIL" --token';
+  // Recovery instruction printed whenever acli auth cannot complete. The command
+  // syntax differs per shell, so pick the form that matches the platform. The
+  // site is read from `.agents/project.yaml` via `jira:url --slug`: `--site`
+  // wants the BARE host, and the old hint interpolated an env var that both
+  // carried a scheme acli rejects and no longer exists.
+  const MANUAL_ACLI_LOGIN = process.platform === 'win32'
+    ? '$env:ATLASSIAN_API_TOKEN | acli jira auth login --site (bun run --silent jira:url --slug) --email $env:ATLASSIAN_EMAIL --token'
+    : 'echo "$ATLASSIAN_API_TOKEN" | acli jira auth login --site "$(bun run --silent jira:url --slug)" --email "$ATLASSIAN_EMAIL" --token';
 
   if (state.postInstall.acliAuth === 'completed') {
     process.stdout.write(`${tui.statusIcon('ok')} acli already authenticated in a prior run.\n`);
@@ -1975,52 +2175,57 @@ async function runInitialConfigurationPhase(state: InstallState): Promise<void> 
     state.postInstall.acliAuth = 'skipped-non-interactive';
     log.dim('  INSTALL_SKIP_JIRA=1, skipping acli authentication.');
   }
+  else if (AUTO_NON_INTERACTIVE) {
+    // Step 10b never prompted for the ATLASSIAN_* credentials (no TTY), so
+    // there is nothing to authenticate with. Skip like every other Phase-5
+    // step instead of aborting — a no-TTY run is normal in Git Bash on
+    // Windows, whose MSYS pty is a named pipe and reports isTTY false.
+    state.postInstall.acliAuth = 'skipped-non-interactive';
+    process.stdout.write(`${tui.statusIcon('warn')} Skipped (no TTY). Set the host with \`bun run agents:setup\` and ATLASSIAN_EMAIL / ATLASSIAN_API_TOKEN in .env, then re-run: bun run setup\n`);
+  }
   else {
     // ATLASSIAN_* credentials were collected during Step 10b (day-0 creds).
     // Here we only verify they're present and run the acli auth.
-    const ATLASSIAN_VARS = ['ATLASSIAN_URL', 'ATLASSIAN_EMAIL', 'ATLASSIAN_API_TOKEN'] as const;
-    const stillMissing = ATLASSIAN_VARS.filter(v => !(process.env[v] && process.env[v].trim().length > 0));
+    const ATLASSIAN_VARS = ['ATLASSIAN_EMAIL', 'ATLASSIAN_API_TOKEN'] as const;
+    const stillMissing: string[] = ATLASSIAN_VARS.filter(
+      v => !(process.env[v] && process.env[v].trim().length > 0),
+    );
+    // The host is NOT an env var — it comes from `.agents/project.yaml`.
+    // `--site` wants the BARE host: passing the yaml value verbatim would hand
+    // acli a scheme (and possibly a trailing slash) that it rejects.
+    let site = '';
+    try { site = toSiteSlug(resolveAtlassianInstance().baseUrl); }
+    catch { stillMissing.unshift('issue_tracker.atlassian_url (.agents/project.yaml)'); }
+    const email = process.env.ATLASSIAN_EMAIL ?? '';
+
     if (stillMissing.length > 0) {
+      // Jira auth is not a prerequisite for Steps 13-14, so record the gap and
+      // let Phase 5 finish writing its catalogs rather than aborting the run.
       state.postInstall.acliAuth = 'skipped-non-interactive';
-      process.stdout.write(`${tui.statusIcon('fail')} Cannot run acli auth — ATLASSIAN_* still missing: ${stillMissing.join(', ')}\n`);
-      process.stdout.write('    Set them in .env (re-run setup) or run manually:\n');
+      process.stdout.write(`${tui.statusIcon('warn')} Cannot run acli auth — still missing: ${stillMissing.join(', ')}\n`);
+      process.stdout.write('    Set the host with `bun run agents:setup`, the credentials in .env, then re-run `bun run setup` — or run manually:\n');
       process.stdout.write(`    ${MANUAL_ACLI_LOGIN}\n`);
       await writeInstallState(state);
-      process.exit(1);
     }
-
     // Probe existing session: a read-only Jira search returns exit 0 if a session exists.
-    const probe = spawnSync('acli', ['jira', 'workitem', 'search', '--jql', 'created >= -1d', '--limit', '1', '--json'], {
+    else if (spawnSync('acli', ['jira', 'workitem', 'search', '--jql', 'created >= -1d', '--limit', '1', '--json'], {
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 8000,
-    });
-
-    if (probe.status === 0) {
+    }).status === 0) {
       state.postInstall.acliAuth = 'completed';
       process.stdout.write(`${tui.statusIcon('ok')} acli already authenticated (existing session detected).\n`);
     }
     else {
       // No session — run the login. Pipe the token via spawnSync `input` to
       // avoid shell injection risks (no `echo $TOKEN | ...` expansion).
-      const url = process.env.ATLASSIAN_URL;
-      const email = process.env.ATLASSIAN_EMAIL;
-      let token = process.env.ATLASSIAN_API_TOKEN;
-
-      if (!url || !email || !token) {
-        // Non-interactive without all three vars preloaded → hard fail.
-        state.postInstall.acliAuth = 'skipped-non-interactive';
-        process.stdout.write(`${tui.statusIcon('fail')} Cannot run acli auth login — ATLASSIAN_URL / ATLASSIAN_EMAIL / ATLASSIAN_API_TOKEN missing.\n`);
-        process.stdout.write(`    Manual auth: ${MANUAL_ACLI_LOGIN}\n`);
-        await writeInstallState(state);
-        process.exit(1);
-      }
+      let token = process.env.ATLASSIAN_API_TOKEN ?? '';
 
       const MAX_ATTEMPTS = 3;
       let success = false;
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         const loginRes = spawnSync(
           'acli',
-          ['jira', 'auth', 'login', '--site', url, '--email', email, '--token'],
+          ['jira', 'auth', 'login', '--site', site, '--email', email, '--token'],
           {
             input: token,
             stdio: ['pipe', 'inherit', 'inherit'],
@@ -2050,98 +2255,125 @@ async function runInitialConfigurationPhase(state: InstallState): Promise<void> 
       }
 
       if (!success) {
+        // Record the failure and carry on: Steps 13-14 write the catalog
+        // placeholders the skills reference, and the closing summary reports
+        // acliAuth: failed. Aborting here left every re-run stuck at 12.4.
         state.postInstall.acliAuth = 'failed';
         process.stdout.write(`${tui.statusIcon('fail')} acli auth login failed after ${MAX_ATTEMPTS} attempts.\n`);
         process.stdout.write(`    Manual auth: ${MANUAL_ACLI_LOGIN}\n`);
         await writeInstallState(state);
-        process.exit(1);
       }
     }
   }
 
-  // ── Step 13: Jira fields sync (with auth pre-flight loop) ─────────────────
-  tui.section('Step 13: Jira fields sync');
+  // ── Step 13: Jira catalogs sync (fields + workflows + link types) ─────────
+  // One prompt picks the catalog source for the whole project:
+  //   own  → live-fetch from the user's Atlassian site (needs admin)
+  //   upex → download the UPEX-Galaxy standard catalogs from GitHub (no admin)
+  //   skip → leave empty {} placeholders, configure later
+  // Whatever the outcome, ensureJiraCatalogPlaceholders() below guarantees the
+  // SKILL.md-referenced JSON files exist so the STALE-PATH lint never breaks
+  // the pre-push hook on a freshly bootstrapped project.
+  tui.section('Step 13: Jira catalogs sync (fields + workflows + link types)');
+
+  const jiraAlreadyDone
+    = state.postInstall.jiraSyncFields === 'completed'
+      && state.postInstall.jiraSyncWorkflows === 'completed';
 
   if (SKIP_JIRA) {
-    log.dim('  INSTALL_SKIP_JIRA=1, skipping Jira bootstrap.');
+    log.dim('  INSTALL_SKIP_JIRA=1, skipping Jira catalog sync.');
     state.postInstall.jiraSyncFields = 'skipped-non-interactive';
+    state.postInstall.jiraSyncWorkflows = 'skipped-non-interactive';
   }
-  else if (state.postInstall.jiraSyncFields === 'completed') {
+  else if (jiraAlreadyDone) {
     process.stdout.write(`${tui.statusIcon('ok')} Already completed in a prior run.\n`);
   }
   else if (AUTO_NON_INTERACTIVE) {
     state.postInstall.jiraSyncFields = 'skipped-non-interactive';
-    process.stdout.write(`${tui.statusIcon('warn')} Skipped (no TTY). Re-run via: bun run jira:sync-fields\n`);
+    state.postInstall.jiraSyncWorkflows = 'skipped-non-interactive';
+    process.stdout.write(`${tui.statusIcon('warn')} Skipped (no TTY). Re-run via: bun run jira:sync-fields && bun run jira:sync-workflows\n`);
   }
   else {
-    const authResult = await jiraAuthLoop();
-    if (authResult === 'skipped') {
+    const mode = await tui.select<'own' | 'upex' | 'skip'>({
+      message: 'Jira catalogs (custom fields, workflows, link types) — which source?',
+      options: [
+        {
+          value: 'own',
+          label: 'My own Jira workspace — live-fetch from your Atlassian site (needs Administer permission)',
+        },
+        {
+          value: 'upex',
+          label: 'UPEX-Galaxy standard — download the reference catalogs from GitHub (no admin needed)',
+        },
+        {
+          value: 'skip',
+          label: 'Skip for now — write empty {} placeholders, configure later',
+        },
+      ],
+    });
+
+    if (tui.isCancel(mode) || mode === 'skip') {
       state.postInstall.jiraSyncFields = 'skipped-no-auth';
-      process.stdout.write(`${tui.statusIcon('warn')} Skipped by user. Re-run via: bun run jira:sync-fields\n`);
+      state.postInstall.jiraSyncWorkflows = 'skipped-no-auth';
+      process.stdout.write(`${tui.statusIcon('warn')} Skipped by user. Re-run later: bun run jira:sync-fields (add --upex for the UPEX standard).\n`);
+    }
+    else if (mode === 'upex') {
+      // --upex short-circuits the Jira API entirely (downloads the cached
+      // UPEX-standard catalogs from GitHub raw), so no auth loop is needed.
+      // --force overwrites the bootstrap-pruned/stale copy unconditionally.
+      const fOut = runJiraSyncCapturingMarker(['run', 'jira:sync-fields', '--', '--upex', '--force']);
+      state.postInstall.jiraSyncFields = fOut;
+      reportJiraOutcome('jira:sync-fields --upex', fOut);
+
+      const wOut = runJiraSyncCapturingMarker(['run', 'jira:sync-workflows', '--', '--upex', '--force']);
+      state.postInstall.jiraSyncWorkflows = wOut;
+      reportJiraOutcome('jira:sync-workflows --upex', wOut);
+
+      // link-types is USER-OK (no admin) and not bootstrap-pruned, but we sync
+      // it here too so 'upex' means the full standard. It has no --force flag;
+      // --upex already overwrites with the upstream catalog.
+      const lOut = runJiraSyncCapturingMarker(['run', 'jira:sync-link-types', '--', '--upex']);
+      reportJiraOutcome('jira:sync-link-types --upex', lOut);
     }
     else {
-      // We're here only when jiraSyncFields is not 'completed' (early-exit
-      // upstream returns when it is). That means this is a first-run pass, so
-      // we always force-overwrite the template's stale jira-fields.json. The
-      // script's safety check still protects user edits in later sessions
-      // because the early-exit guard above short-circuits subsequent runs.
-      const syncArgs = ['run', 'jira:sync-fields', '--', '--force'];
-      const outcome = runJiraSyncCapturingMarker(syncArgs);
-      state.postInstall.jiraSyncFields = outcome;
-      if (outcome === 'completed') {
-        process.stdout.write(`${tui.statusIcon('ok')} jira:sync-fields completed\n`);
-      }
-      else if (outcome === 'skipped-no-admin') {
-        process.stdout.write(`${tui.statusIcon('warn')} jira:sync-fields skipped — your Jira user is not an Administrator.\n`);
-        process.stdout.write('  The boilerplate-bundled .agents/jira-fields.json stays as-is (repo still works).\n');
-        process.stdout.write('  Options: ask a Jira admin to run `bun run jira:sync-fields` and commit the result,\n');
-        process.stdout.write('           or download the UPEX standard catalog via `bun run jira:sync-fields --upex`.\n');
+      // mode === 'own' — live-fetch from the user's Atlassian site. --force is
+      // always passed during setup so a stale bootstrap copy is refreshed; the
+      // script's own populated-file guard protects user edits in later sessions
+      // (this branch only runs while state is not yet 'completed').
+      const authResult = await jiraAuthLoop();
+      if (authResult === 'skipped') {
+        state.postInstall.jiraSyncFields = 'skipped-no-auth';
+        state.postInstall.jiraSyncWorkflows = 'skipped-no-auth';
+        process.stdout.write(`${tui.statusIcon('warn')} Skipped by user. Re-run via: bun run jira:sync-fields (or --upex for the UPEX standard).\n`);
       }
       else {
-        process.stdout.write(`${tui.statusIcon('fail')} jira:sync-fields failed. Continuing.\n`);
+        const fOut = runJiraSyncCapturingMarker(['run', 'jira:sync-fields', '--', '--force']);
+        state.postInstall.jiraSyncFields = fOut;
+        reportJiraOutcome('jira:sync-fields', fOut, true);
+
+        if (fOut === 'skipped-no-admin') {
+          // Same root cause (no Administer permission) applies to workflows.
+          state.postInstall.jiraSyncWorkflows = 'skipped-no-admin';
+          process.stdout.write(`${tui.statusIcon('warn')} jira:sync-workflows skipped — same no-admin reason.\n`);
+          process.stdout.write('  Tip: re-run with the UPEX standard: bun run jira:sync-workflows --upex\n');
+        }
+        else if (fOut !== 'completed') {
+          state.postInstall.jiraSyncWorkflows = 'skipped-no-auth';
+          process.stdout.write(`${tui.statusIcon('warn')} jira:sync-workflows skipped — jira:sync-fields did not complete (shared credentials).\n`);
+        }
+        else {
+          const wOut = runJiraSyncCapturingMarker(['run', 'jira:sync-workflows', '--', '--force']);
+          state.postInstall.jiraSyncWorkflows = wOut;
+          reportJiraOutcome('jira:sync-workflows', wOut, true);
+        }
       }
     }
   }
 
-  // ── Step 13b: Jira workflows + statuses sync ─────────────────────────────
-  tui.section('Step 13b: Jira workflows + statuses sync');
-
-  if (SKIP_JIRA) {
-    state.postInstall.jiraSyncWorkflows = 'skipped-non-interactive';
-    log.dim('  INSTALL_SKIP_JIRA=1, skipping jira:sync-workflows.');
-  }
-  else if (state.postInstall.jiraSyncWorkflows === 'completed') {
-    process.stdout.write(`${tui.statusIcon('ok')} Already completed in a prior run.\n`);
-  }
-  else if (AUTO_NON_INTERACTIVE) {
-    state.postInstall.jiraSyncWorkflows = 'skipped-non-interactive';
-    process.stdout.write(`${tui.statusIcon('warn')} Skipped (no TTY). Re-run via: bun run jira:sync-workflows\n`);
-  }
-  else if (state.postInstall.jiraSyncFields === 'skipped-no-admin') {
-    // Same root cause — admin permission missing. Skip to keep messages consistent.
-    state.postInstall.jiraSyncWorkflows = 'skipped-no-admin';
-    process.stdout.write(`${tui.statusIcon('warn')} Skipped — jira:sync-fields detected no Administer permission. Same applies here.\n`);
-    process.stdout.write('  UPEX-standard alternative: `bun run jira:sync-workflows --upex`.\n');
-  }
-  else if (state.postInstall.jiraSyncFields !== 'completed') {
-    state.postInstall.jiraSyncWorkflows = 'skipped-no-auth';
-    process.stdout.write(`${tui.statusIcon('warn')} Skipped — jira:sync-fields did not complete (uses same Atlassian credentials).\n`);
-  }
-  else {
-    const outcome = runJiraSyncCapturingMarker(['run', 'jira:sync-workflows']);
-    state.postInstall.jiraSyncWorkflows = outcome;
-    if (outcome === 'completed') {
-      process.stdout.write(`${tui.statusIcon('ok')} jira:sync-workflows completed\n`);
-    }
-    else if (outcome === 'skipped-no-admin') {
-      process.stdout.write(`${tui.statusIcon('warn')} jira:sync-workflows skipped — your Jira user is not an Administrator.\n`);
-      process.stdout.write('  The boilerplate-bundled .agents/jira-workflows.json stays as-is (repo still works).\n');
-      process.stdout.write('  UPEX-standard alternative: `bun run jira:sync-workflows --upex`.\n');
-    }
-    else {
-      process.stdout.write(`${tui.statusIcon('fail')} jira:sync-workflows failed. Continuing.\n`);
-    }
-  }
+  // Safety net (anti STALE-PATH): every Jira catalog referenced by SKILL.md
+  // bodies must exist on disk or the lint-skills check fails the pre-push hook.
+  // Any path still missing after the sync phase gets an empty {} placeholder.
+  await ensureJiraCatalogPlaceholders();
 
   // ── Step 14: Jira manifest check ─────────────────────────────────────────
   tui.section('Step 14: Jira manifest check');
@@ -2320,7 +2552,7 @@ function printClosingSummary(state: InstallState): void {
 
   if (state.postInstall.acliAuth !== 'completed') {
     process.stdout.write(`${circled[stepNum]}  ${COLORS.bold}Authenticate acli (Atlassian CLI)${COLORS.reset}\n`);
-    process.stdout.write(`    ${COLORS.cyan}echo "$ATLASSIAN_API_TOKEN" | acli jira auth login --site "$ATLASSIAN_URL" --email "$ATLASSIAN_EMAIL" --token${COLORS.reset}\n`);
+    process.stdout.write(`    ${COLORS.cyan}echo "$ATLASSIAN_API_TOKEN" | acli jira auth login --site "$(bun run --silent jira:url --slug)" --email "$ATLASSIAN_EMAIL" --token${COLORS.reset}\n`);
     process.stdout.write(`    ${COLORS.dim}Writes a persistent session to ~/.config/acli/. The /acli skill needs this.${COLORS.reset}\n\n`);
     stepNum++;
   }
@@ -2349,7 +2581,8 @@ function printClosingSummary(state: InstallState): void {
   process.stdout.write(`${circled[stepNum]}  ${COLORS.bold}Open the agent${COLORS.reset}\n`);
   process.stdout.write(`    ${COLORS.cyan}bun claude${COLORS.reset}       ${COLORS.dim}(dotenv-cli loads .env)${COLORS.reset}\n`);
   process.stdout.write(`    ${COLORS.cyan}bun opencode${COLORS.reset}     ${COLORS.dim}(dotenv-cli loads .env)${COLORS.reset}\n`);
-  process.stdout.write(`    ${COLORS.dim}Or just \`claude\` / \`opencode\` if direnv autoload is set up.${COLORS.reset}\n\n`);
+  process.stdout.write(`    ${COLORS.cyan}bun codex${COLORS.reset}        ${COLORS.dim}(CLI; Codex Desktop opens this same repository)${COLORS.reset}\n`);
+  process.stdout.write(`    ${COLORS.dim}Or use the executable directly if direnv autoload is set up. Codex Desktop needs repository trust before hooks run.${COLORS.reset}\n\n`);
   stepNum++;
 
   process.stdout.write(`${circled[stepNum]}  ${COLORS.bold}Tour the stack${COLORS.reset}\n`);
@@ -2408,6 +2641,11 @@ function printClosingSummary(state: InstallState): void {
   process.stdout.write(`  ${COLORS.bold}/regression-testing${COLORS.reset}      Regression / GO-NO-GO — Stage 6\n`);
   process.stdout.write(`  ${COLORS.bold}bun xray${COLORS.reset}                 Xray Cloud CLI (bun run xray --help for all commands)\n\n`);
 
+  // Git strategy reminder — the project inherited the boilerplate's git_strategy block.
+  tui.section('Git strategy');
+  process.stdout.write(`  This project inherited the boilerplate's git strategy. Run ${COLORS.bold}"set up our git strategy"${COLORS.reset} in Claude\n`);
+  process.stdout.write(`  ${COLORS.dim}(git-flow-master Strategy Setup) to define your own flow.${COLORS.reset}\n\n`);
+
   // Missing CLIs
   if (cliMissing.length > 0) {
     tui.section('Missing CLIs — install when ready');
@@ -2429,12 +2667,20 @@ function printClosingSummary(state: InstallState): void {
   process.stdout.write('→  caveman — token compression skill (recommended)\n');
   process.stdout.write(`   ${COLORS.dim}Cuts ~65-75% output tokens. Levels: lite | full (default) | ultra | wenyan.${COLORS.reset}\n`);
   process.stdout.write(`   ${COLORS.dim}Stop with: "normal mode" / "habla normal".${COLORS.reset}\n`);
+  // `--no-hooks` is deliberate. The installer defaults to `--all`, which installs
+  // the Claude Code plugin AND writes a second copy of the same two hooks into
+  // ~/.claude/settings.json — both fire every turn, injecting caveman twice per
+  // prompt. The flag keeps the plugin (it registers those hooks in its own
+  // plugin.json), the multi-agent coverage this repo needs for OpenCode, and the
+  // caveman-shrink MCP proxy. On Windows `irm | iex` cannot receive arguments
+  // (caveman #565), so we call the Node installer the script delegates to anyway.
   if (process.platform === 'win32') {
-    process.stdout.write('   irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | iex\n');
+    process.stdout.write('   npx -y github:JuliusBrussee/caveman --no-hooks\n');
   }
   else {
-    process.stdout.write('   curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash\n');
+    process.stdout.write('   curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash -s -- --no-hooks\n');
   }
+  process.stdout.write(`   ${COLORS.dim}--no-hooks avoids a duplicate hook registration — see INSTALLER.md.${COLORS.reset}\n`);
   process.stdout.write(`   ${COLORS.dim}Docs: https://github.com/JuliusBrussee/caveman${COLORS.reset}\n\n`);
 
   process.stdout.write('→  ccstatusline — Claude Code statusline TUI configurator (cosmetic)\n');
@@ -2600,9 +2846,7 @@ async function main(): Promise<void> {
     process.stdout.write(`${tui.headline('agentic-qa-boilerplate — sync community skills')}\n\n`);
     await verifyRepoRoot();
     const detected = await detectAgents();
-    log.info(
-      `Claude Code: ${detected.claudeCode ? 'found' : 'not found'} | OpenCode: ${detected.opencode ? 'found' : 'not found'}`,
-    );
+    log.info(describeAgentDetection(detected));
     const agents = await promptAgentSelection(detected);
     if (agents.length === 0) {
       log.warn('No agents selected — nothing to sync.');
@@ -2613,6 +2857,8 @@ async function main(): Promise<void> {
     const syncForceKeys = new Set<string>();
     await installCommunitySkills(agents, state, 'project', syncForceKeys);
     await installCommunitySkills(agents, state, 'global', syncForceKeys);
+    const compatibility = repairRepositoryCompatibility();
+    log.success(`Repository compatibility ready (${compatibility.wrappersWritten} wrapper updates; Claude alias ${compatibility.alias.status}).`);
     await writeInstallState(state);
     log.success(`Community skills synced to: ${agents.join(', ')}.`);
     process.exit(0);
@@ -2705,9 +2951,7 @@ async function main(): Promise<void> {
 
   tui.section('Step 4: Detecting agents');
   const detected = await detectAgents();
-  log.info(
-    `Claude Code: ${detected.claudeCode ? 'found' : 'not found'} | OpenCode: ${detected.opencode ? 'found' : 'not found'}`,
-  );
+  log.info(describeAgentDetection(detected));
   const agents = await promptAgentSelection(detected);
   state.agents = agents;
   if (agents.length === 0) {
@@ -2753,6 +2997,9 @@ async function main(): Promise<void> {
     await installCommunitySkills(agents, state, 'global', forceKeys);
   }
 
+  const compatibility = repairRepositoryCompatibility();
+  log.success(`Repository compatibility ready (${compatibility.wrappersWritten} wrapper updates; Claude alias ${compatibility.alias.status}).`);
+
   // ── PHASE 3 — CONFIGURATION ──────────────────────────────────────────────
   tui.phaseHeader(3, 'CONFIGURATION');
 
@@ -2788,20 +3035,22 @@ async function main(): Promise<void> {
   printClosingSummary(state);
 }
 
-main().catch((err) => {
+if (import.meta.main) {
+  void main().catch((err) => {
   // Handle both @inquirer ExitPromptError and our own clack cancel wrappers
-  const name = err && typeof err === 'object' && 'name' in err ? (err as { name: string }).name : '';
-  if (name === 'ExitPromptError' || (err instanceof Error && err.message === 'Aborted by user.')) {
-    tui.log.warn('Aborted by user.');
-    process.stdout.write('  To resume, re-run: bun run setup\n');
+    const name = err && typeof err === 'object' && 'name' in err ? (err as { name: string }).name : '';
+    if (name === 'ExitPromptError' || (err instanceof Error && err.message === 'Aborted by user.')) {
+      tui.log.warn('Aborted by user.');
+      process.stdout.write('  To resume, re-run: bun run setup\n');
+      process.stdout.write('  (Installer is idempotent — completed steps will skip on re-run.)\n');
+      process.exit(130);
+    }
+    tui.log.error(`Fatal: ${(err as Error).message ?? String(err)}`);
+    if (err instanceof Error && err.stack) {
+      process.stdout.write(`  ${err.stack}\n`);
+    }
+    tui.log.warn('Installation interrupted. To resume, re-run: bun run setup');
     process.stdout.write('  (Installer is idempotent — completed steps will skip on re-run.)\n');
-    process.exit(130);
-  }
-  tui.log.error(`Fatal: ${(err as Error).message ?? String(err)}`);
-  if (err instanceof Error && err.stack) {
-    process.stdout.write(`  ${err.stack}\n`);
-  }
-  tui.log.warn('Installation interrupted. To resume, re-run: bun run setup');
-  process.stdout.write('  (Installer is idempotent — completed steps will skip on re-run.)\n');
-  process.exit(1);
-});
+    process.exit(1);
+  });
+}

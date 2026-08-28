@@ -81,6 +81,24 @@ export function errorMessage(err: unknown): string {
 /**
  * Recursive count of plain files under a directory. Returns 0 when the dir is missing.
  */
+/**
+ * True when a repo-relative path falls under one of the `repoOnlyPaths` prefixes
+ * — the boilerplate's own material, which never travels to a consumer project.
+ *
+ * A prefix matches the path itself or anything beneath it, and only at a segment
+ * boundary: `docs/qa-standard` must not swallow a sibling called
+ * `docs/qa-standards` or `docs/qa-standard-archive`. Backslashes are normalized
+ * so a Windows-shaped entry path compares equal to a POSIX-shaped prefix.
+ */
+export function isRepoOnlyPath(filePath: string, prefixes: string[]): boolean {
+  const p = filePath.replace(/\\/g, '/');
+  return prefixes.some((raw) => {
+    const prefix = raw.replace(/\\/g, '/').replace(/\/+$/, '');
+    if (prefix === '') { return false; }
+    return p === prefix || p.startsWith(`${prefix}/`);
+  });
+}
+
 export function countFilesInDir(dir: string): number {
   if (!fs.existsSync(dir)) { return 0; }
   let count = 0;
@@ -902,7 +920,7 @@ function dedupeDeltaByPath(
  *
  *   - `paths: ['.']` matches any path; specificity 0.
  *   - `paths: ['.claude']` matches `.claude/foo`; specificity 7.
- *   - `paths: ['.claude/skills']` matches `.claude/skills/foo`; specificity 14.
+ *   - `paths: ['.agents/skills']` matches `.agents/skills/foo`; specificity 14.
  *
  * Used by `dedupeDeltaByPath` to pick the most-specific owner when two
  * components both match a file.
@@ -1741,6 +1759,62 @@ export function cleanupDeprecated(
   return removed;
 }
 
+/**
+ * List uncommitted working-tree paths that fall INSIDE the updater's write
+ * surface (component dirs/files, ignore-files, package.json specs, deprecated
+ * files). Paths outside that surface (tests/, .context/, user code…) are never
+ * touched by the sync, so they must never trigger the dirty gate.
+ *
+ * bootstrapOnly components are excluded: when their files exist locally the
+ * classifier forces `unchanged`, so local edits there are never overwritten.
+ * Rename lines ("old -> new") match if EITHER side is watched.
+ */
+export function scopedDirtyPaths(cfg: UpdaterConfig, repoRoot: string, extraExcludedPaths: string[] = []): string[] {
+  let lines: string[] = [];
+  try {
+    lines = execSync(`git -C "${repoRoot}" status --porcelain`, { encoding: 'utf8' })
+      .split('\n')
+      .map(l => l.slice(3).trim())
+      .filter(Boolean);
+  }
+  catch {
+    return []; // not a git repo / git unavailable — nothing to guard against
+  }
+
+  const prefixes: string[] = [];
+  const exact = new Set<string>();
+  for (const c of cfg.components) {
+    if (c.bootstrapOnly) { continue; }
+    if (c.type === 'directory' || c.type === 'mixed') {
+      for (const p of c.paths) { prefixes.push(`${p.replace(/\/+$/, '')}/`); }
+    }
+    if (c.files) {
+      const base = c.paths[0] === '.' ? '' : `${c.paths[0].replace(/\/+$/, '')}/`;
+      for (const f of c.files) { exact.add(`${base}${f}`); }
+    }
+  }
+  for (const ig of cfg.ignoreFiles) { exact.add(ig.path); }
+  for (const spec of cfg.packageJsonSpecs ?? []) { exact.add(spec.path); }
+  for (const dep of cfg.deprecatedFiles) { exact.add(dep.path); }
+
+  // cfg.excludePaths are never written by the sync (e.g. the per-repo generated
+  // REGISTRY.md, project-adapted api-login.ts) — dirty state there is normal
+  // and must not block the run.
+  const excluded = new Set([
+    ...(cfg.excludePaths ?? []),
+    ...extraExcludedPaths,
+  ].map(p => p.replace(/\\/g, '/')));
+
+  const strip = (p: string): string => p.replace(/^"|"$/g, ''); // porcelain quotes paths with spaces
+  const watched = (p: string): boolean =>
+    !excluded.has(p) && (exact.has(p) || prefixes.some(pre => p.startsWith(pre)));
+
+  return lines.filter((line) => {
+    const sides = line.split(' -> ').map(s => strip(s.trim()));
+    return sides.some(watched);
+  });
+}
+
 // ============================================================================
 // ORCHESTRATOR — runUpdate (Phase B mega-flow)
 // ============================================================================
@@ -1793,23 +1867,25 @@ export async function runUpdate(
     componentsHeldBack: [],
   };
 
-  // --- DIRTY WORKING TREE GUARD (data-loss safety, pre-fetch) ---
-  // Pre-write backups live in .backups/, which is gitignored — so an
-  // uncommitted user who proceeds and later runs `git clean` / `git stash` can
-  // lose both the working copy and the backup. Refuse on a dirty tree unless
-  // --force; interactive mode offers an explicit override.
-  if (!opts.dryRun && !opts.force) {
-    let dirty = '';
-    try {
-      dirty = execSync(`git -C "${repoRoot}" status --porcelain`, { encoding: 'utf8' }).trim();
-    }
-    catch {
-      dirty = ''; // not a git repo / git unavailable — nothing to guard against
-    }
-    if (dirty) {
-      sink.warn('El árbol de trabajo tiene cambios sin commitear. Los backups del updater van a .backups/ (gitignored); un `git clean` posterior podría perderlos. Commitea o haz stash antes de actualizar.');
-      if (opts.auto) {
-        sink.error('Abortado: árbol sucio en modo --auto. Re-ejecuta con --force para forzar.');
+  // --- SCOPED DIRTY WORKING TREE GATE (data-loss safety, pre-fetch) ---
+  // Only uncommitted changes INSIDE the updater's write surface block the run:
+  // those files would be overwritten and their pre-write backups live in
+  // .backups/ (gitignored), so a later `git clean` could lose both copies.
+  // Dirty paths OUTSIDE the surface (tests/, user code…) never trigger this.
+  // Interactive mode may override with an explicit confirm; the default
+  // (non-interactive) mode always aborts — commit/stash/restore and re-run.
+  if (!opts.dryRun) {
+    // Files the self-update parent just wrote from upstream are excluded: they
+    // match upstream exactly, so overwriting them loses nothing (see re-exec env).
+    const selfUpdatedPaths = (process.env.UPEX_UPDATER_SELFUPDATED ?? '').split('\n').filter(Boolean);
+    const dirtyWatched = scopedDirtyPaths(cfg, repoRoot, selfUpdatedPaths);
+    if (dirtyWatched.length > 0) {
+      sink.warn(`Hay ${dirtyWatched.length} ruta(s) con cambios sin commitear que este updater SINCRONIZA (serían sobrescritas; sus backups van a .backups/, que está gitignored):`);
+      for (const p of dirtyWatched.slice(0, 20)) { sink.step(`  ${p}`); }
+      if (dirtyWatched.length > 20) { sink.step(`  … y ${dirtyWatched.length - 20} más`); }
+      const interactive = !opts.auto && opts.force !== true;
+      if (!interactive) {
+        sink.error('Abortado: commitea, stashea o restaura esas rutas y vuelve a ejecutar. (Con --interactive puedes continuar bajo confirmación explícita.)');
         return emptySummary;
       }
       const proceed = await sink.confirm('¿Continuar de todas formas pese a los cambios sin commitear?', false);
@@ -1872,11 +1948,15 @@ export async function runUpdate(
   const templateDir = cfg.tempDir;
   try {
     // Sparse-checkout must include component paths, ignore-file paths AND
-    // package.json paths so Phase 4.5 / 4.5b can read them out of the partial clone.
+    // package.json paths so Phase 4.5 / 4.5b can read them out of the partial
+    // clone — plus any extra paths hooks need to read from upstream (e.g. the
+    // protected-file drift watchlist; without them the advisory silently
+    // skips every entry because the upstream copy "does not exist").
     const sparsePatterns = [
       ...buildSparseCheckoutPatterns(cfg.components),
       ...cfg.ignoreFiles.map(spec => spec.path),
       ...(cfg.packageJsonSpecs ?? []).map(spec => spec.path),
+      ...(cfg.sparseExtraPaths ?? []),
     ];
     await partialCloneTemplate(cfg.templateRepo, cfg.tempDir, sparsePatterns);
     fetchSpin.stop(`Template descargado (sparse-checkout): ${cfg.templateRepo}`);
@@ -1975,7 +2055,11 @@ export async function runUpdate(
         sink.step('Re-ejecutando con código actualizado…');
         const child = spawnSync(process.execPath, [process.argv[1], ...process.argv.slice(2)], {
           stdio: 'inherit',
-          env: { ...process.env, UPEX_UPDATER_REEXEC: '1' },
+          // UPEX_UPDATER_SELFUPDATED: the cli/ files THIS parent just wrote from
+          // upstream. The child's scoped dirty check excludes them — they match
+          // upstream byte-for-byte, so "would be overwritten" loses nothing, and
+          // without the exclusion every self-update aborts on its own writes.
+          env: { ...process.env, UPEX_UPDATER_REEXEC: '1', UPEX_UPDATER_SELFUPDATED: stale.join('\n') },
         });
         cleanupTempDir(cfg.tempDir);
         if (child.error) {
@@ -2097,12 +2181,19 @@ export async function runUpdate(
   }
 
   // Drop generated, per-repo files that must never be synced (e.g.
-  // .claude/skills/REGISTRY.md). One filter point covers all three detection
+  // .agents/skills/REGISTRY.md). One filter point covers all three detection
   // paths — bootstrap, content reconcile, and git-log delta — since they all
   // feed into `entries`. Each repo regenerates these from its own state.
   if (cfg.excludePaths && cfg.excludePaths.length > 0) {
     const excluded = new Set(cfg.excludePaths.map(p => p.replace(/\\/g, '/')));
     entries = entries.filter(e => !excluded.has(e.path.replace(/\\/g, '/')));
+  }
+
+  // Drop the boilerplate's own working material, which no consumer inherits
+  // (e.g. `docs/qa-standard/`). Same filter point as excludePaths for the same
+  // reason: all three detection paths converge on `entries`.
+  if (cfg.repoOnlyPaths && cfg.repoOnlyPaths.length > 0) {
+    entries = entries.filter(e => !isRepoOnlyPath(e.path, cfg.repoOnlyPaths ?? []));
   }
 
   // Filter out unchanged / binary-skip from the user-facing pool
@@ -2151,6 +2242,19 @@ export async function runUpdate(
 
   if (visible.length === 0 && ignoreDeltasPre.length === 0 && pkgJsonDeltasPre.length === 0) {
     sink.step('Sin cambios detectados respecto al upstream. Nada que sincronizar.');
+    // Advisory hooks still run: protected watchlist files (not synced
+    // components) can drift upstream even when every component is current,
+    // and the template clone they read from is still on disk here.
+    if (cfg.hooks?.afterApply && !opts.dryRun) {
+      try {
+        await cfg.hooks.afterApply(emptySummary);
+      }
+      catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        sink.warn(`afterApply hook falló: ${msg}`);
+      }
+    }
+    cleanupTempDir(cfg.tempDir);
     return emptySummary;
   }
   if (visible.length > 0) {

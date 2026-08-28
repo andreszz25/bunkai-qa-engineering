@@ -1,6 +1,6 @@
 # BK-22 — Acceptance Criteria
 
-> Jira field: `customfield_10141` · [View in Jira](https://upexgalaxy67.atlassian.net/browse/BK-22)
+> Jira field: `customfield_10063` · [View in Jira](https://jira.upexgalaxy.com/browse/BK-22)
 
 ## Scenario 1.1: Should show "Used in N tests" count for ATC referenced in multiple Tests (Type: Positive, Priority: Critical)
 
@@ -8,10 +8,10 @@
 - ***When***: the user opens the ATC detail page for atc-slug-a
 - ***Then***:
 
-  - UI: the usage widget displays "Used in 4 tests"
-  - API: GET /atcs/{atc-slug-a-id}/usage returns HTTP 200 with body { "used_in": [ ...4 or more entries... ] } (N distinct Test entries)
-  - DB: no mutation; read-only query against test_steps JOIN tests
-  - System state: unchanged
+- UI: the usage widget displays "Used in 4 tests"
+- API: GET /atcs/{atc-slug-a-id}/usage returns HTTP 200 with body { "used_in": [ ...4 or more entries... ] } (N distinct Test entries)
+- DB: no mutation; read-only query against test_steps JOIN tests
+- System state: unchanged
 
 ---
 
@@ -21,10 +21,10 @@
 - ***When***: the user expands the usage report on the ATC detail page
 - ***Then***:
 
-  - UI: the expanded list shows 4 entries; each entry displays the Test title and the ATC's position within that Test
-  - API: response body contains 4 objects each with test*id, slug, title, position*in_test fields
-  - List order: entries are ordered by Test slug ascending, then position ascending (per Architect Annotation)
-  - DB: no mutation
+- UI: the expanded list shows 4 entries; each entry displays the Test title and the ATC's position within that Test
+- API: response body contains 4 objects each with test*id, slug, title, position*in_test fields
+- List order: entries are ordered by Test slug ascending, then position ascending (per Architect Annotation)
+- DB: no mutation
 
 ## Scenario 2.2: Should show multiple rows when one Test references the same ATC at multiple positions (Type: Edge, Priority: High) — NEEDS PO/DEV CONFIRMATION
 
@@ -33,9 +33,9 @@
 - ***When***: the usage report is expanded
 - ***Then***:
 
-  - API: GET /atcs/{atc-slug-b-id}/usage returns HTTP 200 with at minimum 2 entries for Test-X: { position*in*test: 2 } and { position*in*test: 5 }
-  - UI: rendering behavior to be confirmed by PO — either two rows for Test-X or one row with "positions: 2, 5"
-  - Count label: ***NEEDS PO/DEV CONFIRMATION*** — should read "Used in 1 test" (1 distinct Test) or "Used in 2 steps" (2 positions)?
+- API: GET /atcs/{atc-slug-b-id}/usage returns HTTP 200 with at minimum 2 entries for Test-X: { position*in*test: 2 } and { position*in*test: 5 }
+- UI: rendering behavior to be confirmed by PO — either two rows for Test-X or one row with "positions: 2, 5"
+- Count label: ***NEEDS PO/DEV CONFIRMATION*** — should read "Used in 1 test" (1 distinct Test) or "Used in 2 steps" (2 positions)?
 
 ---
 
@@ -45,9 +45,9 @@
 - ***When***: the user opens the ATC detail page for atc-slug-c
 - ***Then***:
 
-  - UI: the widget displays "Used in 0 tests"; the expandable list is empty (or the expand control is absent/disabled)
-  - API: GET /atcs/{atc-slug-c-id}/usage returns HTTP 200 with body { "used_in": [] } — NOT 404
-  - DB: no mutation
+- UI: the widget displays "Used in 0 tests"; the expandable list is empty (or the expand control is absent/disabled)
+- API: GET /atcs/{atc-slug-c-id}/usage returns HTTP 200 with body { "used_in": [] } — NOT 404
+- DB: no mutation
 
 ## Scenario 3.2: Should return 200 with empty array (not 404) for an ATC with zero usage — API contract (Type: API, Priority: Critical) — NEEDS PO/DEV CONFIRMATION
 
@@ -56,8 +56,8 @@
 - ***When***: GET /atcs/{atc-slug-c-id}/usage is called with a valid session cookie or PAT (atc:read scope)
 - ***Then***:
 
-  - API: HTTP 200 { "used_in": [] }
-  - NOT: HTTP 404 with any error code
+- API: HTTP 200 { "used_in": [] }
+- NOT: HTTP 404 with any error code
 
 ---
 
@@ -67,9 +67,9 @@
 - ***When***: the user opens the usage report for atc-slug-a in W1
 - ***Then***:
 
-  - UI: Test-Z is NOT listed; count reflects only W1 Tests
-  - API: GET /atcs/{atc-slug-a-id}/usage returns 200 with used*in array containing only Tests where t.workspace*id = W1
-  - DB: no mutation; WHERE clause enforces workspace scoping
+- UI: Test-Z is NOT listed; count reflects only W1 Tests
+- API: GET /atcs/{atc-slug-a-id}/usage returns 200 with used*in array containing only Tests where t.workspace*id = W1
+- DB: no mutation; WHERE clause enforces workspace scoping
 
 ## Scenario 4.2: Should return 404 (not 403 or 200) when the ATC belongs to a different workspace — NEEDS PO/DEV CONFIRMATION
 
@@ -78,9 +78,9 @@
 - ***When***: GET /atcs/{atc-slug-x-id}/usage is called from W1 context
 - ***Then***:
 
-  - API: HTTP 404 with body { "error": "atc*not*found" } (or equivalent error code)
-  - NOT: HTTP 403 (which would confirm the ATC exists in another workspace — information leak)
-  - NOT: HTTP 200 with empty used_in (ambiguous — indistinguishable from a valid ATC with zero usage)
+- API: HTTP 404 with body { "error": "atc*not*found" } (or equivalent error code)
+- NOT: HTTP 403 (which would confirm the ATC exists in another workspace — information leak)
+- NOT: HTTP 200 with empty used_in (ambiguous — indistinguishable from a valid ATC with zero usage)
 
 ---
 
@@ -104,6 +104,13 @@
 - ***Given***: no session cookie and no Authorization header
 - ***When***: GET /atcs/{id}/usage is called
 - ***Then***: HTTP 401 — consistent with all other protected BK-13 endpoints
+
+## Scenario (design fidelity): "Used by N tests" surface in the Projects screen
+
+Given an ATC shown in the Tree-view detail pane or the Table view
+When the tests domain exists
+Then the ATC surfaces "Used by N tests" listing the tests that chain it
+And this matches the Projects screen per master-design-plan §4.3 and mockup screens/project.jsx (Detail "Used by tests")
 
 ---
 _Synced from Jira by sync-jira-issues_

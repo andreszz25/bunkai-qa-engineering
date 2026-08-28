@@ -107,4 +107,21 @@ export class LoginPage extends UiBase {
     await expect(errorIndicator).toBeVisible({ timeout: 5000 });
     await expect(this.page).toHaveURL(/.*\/login.*/);
   }
+
+  /**
+   * ATC: OAuth buttons are enabled and the "ships next sprint" copy is gone.
+   *
+   * Covers TC-27 (buttons enabled) AND TC-28 (copy updated) — same
+   * precondition (page load) + same action (none, passive render check),
+   * so per KATA Rule 2 (TC Identity = Precondition + Action) they are one
+   * ATC, not two.
+   */
+  @atc('TC-27')
+  async verifyOAuthButtonsEnabledWithUpdatedCopy(): Promise<void> {
+    await this.goto();
+
+    await expect(this.page.locator('[data-testid="oauth-github"]')).toBeEnabled();
+    await expect(this.page.locator('[data-testid="oauth-google"]')).toBeEnabled();
+    await expect(this.page.getByText(/ships next sprint/i)).toHaveCount(0);
+  }
 }
