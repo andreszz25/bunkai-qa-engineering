@@ -4,7 +4,7 @@ The bundled converter (`scripts/md-to-adf.ts`) and the "Publishing rich text" se
 
 It is a **style guide, not a mandate generator**. It teaches the generic palette and the decision rules. *Which* structure suits *which* field (an ATP body vs an acceptance-criteria field vs a scope list) is domain knowledge owned by the consuming workflow skill — this file is what those skills cite so the generic doctrine stays single-source and DRY across every field and both boilerplates.
 
-> **Doctrine anchor**: the host `CLAUDE.md` already prescribes a **Visual Mapping Bias** for the AI's own replies — "prefer a table / diagram over a paragraph when content is naturally mappable." This file extends that exact belief to the artifacts the AI writes *into Jira*. Same philosophy, new surface. It is not new doctrine — it is consistency.
+> **Doctrine anchor**: the host `AGENTS.md` already prescribes a **Visual Mapping Bias** for the AI's own replies — "prefer a table / diagram over a paragraph when content is naturally mappable." This file extends that exact belief to the artifacts the AI writes *into Jira*. Same philosophy, new surface. It is not new doctrine — it is consistency.
 
 ## Table of contents
 
@@ -79,23 +79,25 @@ Use the **lozenge** for a single transition state of the whole item (a pill read
 ```bash
 # by email (exact match)
 curl -sS -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN" \
-  "$ATLASSIAN_URL/rest/api/3/user/search?query=person@example.com" | jq -r '.[0].accountId'
+  "$(bun run --silent jira:url)/rest/api/3/user/search?query=person@example.com" | jq -r '.[0].accountId'
 # your own account
 curl -sS -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN" \
-  "$ATLASSIAN_URL/rest/api/3/myself" | jq -r '.accountId'
+  "$(bun run --silent jira:url)/rest/api/3/myself" | jq -r '.accountId'
 ```
 
 Then author `@[Person Name](<accountId>)`. Verified live: the node round-trips as `{id:<accountId>, text:"@Name", accessLevel:""}` — a real, notifying tag. Use mentions sparingly (a mention pings the person); reserve them for assignment / hand-off / blocker call-outs, not decoration.
+
+**Issue links — real links, never bare keys.** A plain-text issue key (`UPEX-512`) in an ADF body does NOT auto-link — it publishes as inert text the reader cannot click (unlike the legacy wiki renderer). Any mention of a **blocking, filed, or referenced ticket** inside a comment / ATR / description body MUST be authored as a real Markdown link to the issue's browse URL — `[UPEX-512: short title](https://<your-site>.atlassian.net/browse/UPEX-512)` — which the converter emits as a `link` mark and the Jira UI upgrades to a smart-link card. Bare keys are acceptable only inside code blocks and in machine-read artifact ID lists (e.g. the `Artifacts:` line) where the consuming skill says so. This is doubly binding for blockers: a blocking bug named as plain text defeats the point of naming it — the reader must be one click from the blocker. (The traceability issuelink per `agentic-qa-core/references/traceability-linking.md` is a separate, additional requirement — the link mark aids the human, the issuelink feeds the graph; never substitute one for the other.)
 
 **Media (images / videos) — upload first, then embed (use the helper).** `![](path)` does NOT work in Jira ADF: a media node needs the opaque media-services UUID of an uploaded file, which the public attachments API does not hand back directly. The bundled helper `scripts/jira-attach-media.ts` runs the verified 3-step recipe (upload attachment → resolve the UUID from the attachment-content redirect → build the `mediaSingle > media` node) so you never assemble it by hand:
 
 ```bash
 # attach a screenshot to a bug AND post it as an evidence comment in one call
-bun .claude/skills/acli/scripts/jira-attach-media.ts BUG-123 ./repro-step-3.png \
+bun .agents/skills/acli/scripts/jira-attach-media.ts BUG-123 ./repro-step-3.png \
   --caption "Repro step 3 — validation error not shown" --publish
 
 # or just emit the media node JSON to splice into a larger ADF body you are assembling
-bun .claude/skills/acli/scripts/jira-attach-media.ts BUG-123 ./diagram.png --doc > media.adf.json
+bun .agents/skills/acli/scripts/jira-attach-media.ts BUG-123 ./diagram.png --doc > media.adf.json
 ```
 
 The helper auto-detects PNG / JPEG / GIF dimensions (pass `--width`/`--height` for video or other formats), and `collection` is always stored as `""` (Jira ignores the input). Reach for media when a picture genuinely beats words — a bug screenshot, a failing-UI capture, an architecture diagram — not for decoration. The image must be uploaded to the *same issue* it is embedded in.

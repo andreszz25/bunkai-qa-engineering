@@ -31,18 +31,47 @@ curl https://xray.cloud.getxray.app/api/v2/graphql \
 
 ## Key Queries
 
-### Get Test
+### Get Test (single)
+
+There is no `getTest(issueId:)` in the CLI — a single test is fetched through
+`getTests` with a `key = X` JQL and `limit: 1` (`QUERIES.getTest`):
 
 ```graphql
-query GetTest($issueId: String!) {
-  getTest(issueId: $issueId) {
-    issueId
-    jira(fields: ["key", "summary", "status", "labels"])
-    testType { name }
-    steps { id action data result }
-    gherkin
-    unstructured
-    precondition { issueId jira(fields: ["key"]) }
+query GetTest($jql: String!) {
+  getTests(jql: $jql, limit: 1) {
+    results {
+      issueId
+      projectId
+      testType { name }
+      steps { id action data result }
+      gherkin
+      unstructured
+      preconditions(limit: 10) { results { issueId jira(fields: ["key", "summary"]) } }
+      jira(fields: ["key", "summary", "description", "status", "labels"])
+    }
+  }
+}
+```
+
+### Get Test By Id
+
+Same projection, addressed by numeric `issueId` instead of JQL
+(`QUERIES.getTestById`). issueIds are the only stable handle during a
+cross-site migration, where the same key resolves to a different id per site:
+
+```graphql
+query GetTestById($issueIds: [String]) {
+  getTests(issueIds: $issueIds, limit: 1) {
+    results {
+      issueId
+      projectId
+      testType { name }
+      steps { id action data result }
+      gherkin
+      unstructured
+      preconditions(limit: 10) { results { issueId jira(fields: ["key", "summary"]) } }
+      jira(fields: ["key", "summary", "description", "status", "labels"])
+    }
   }
 }
 ```
@@ -83,23 +112,28 @@ query GetTestExecution($issueId: String!) {
 
 ### Get Test Run
 
+The run query is `getTestRunById(id:)` — NOT `getTestRun` (`QUERIES.getTestRunById`):
+
 ```graphql
-query GetTestRun($id: String!) {
-  getTestRun(id: $id) {
+query GetTestRunById($id: String!) {
+  getTestRunById(id: $id) {
     id
-    status { name }
+    status { name color description }
     comment
-    defects
     startedOn
     finishedOn
+    defects
+    evidence { id filename }
     steps {
       id
       action
       data
       result
-      status { name }
       comment
+      status { name color }
     }
+    test { issueId jira(fields: ["key", "summary"]) }
+    testExecution { issueId jira(fields: ["key"]) }
   }
 }
 ```
@@ -108,22 +142,44 @@ query GetTestRun($id: String!) {
 
 ### Create Test
 
+The test type is passed as an `UpdateTestTypeInput!` object (e.g.
+`{ name: "Manual" }`), the project key travels inside `jira.fields.project`,
+and inline `steps` are accepted by the schema but silently dropped by Xray
+Cloud — see the Manual-steps gotcha in SKILL.md (always `addTestStep` after):
+
 ```graphql
 mutation CreateTest(
-  $projectKey: String!
-  $summary: String!
-  $description: String
-  $testTypeId: String!
+  $testType: UpdateTestTypeInput!,
+  $steps: [CreateStepInput],
+  $unstructured: String,
+  $gherkin: String,
+  $projectKey: String!,
+  $summary: String!,
+  $description: String,
+  $labels: [String],
+  $folderPath: String
 ) {
   createTest(
-    projectKey: $projectKey
-    testType: { id: $testTypeId }
-    jira: { fields: { summary: $summary, description: $description } }
+    testType: $testType,
+    steps: $steps,
+    unstructured: $unstructured,
+    gherkin: $gherkin,
+    folderPath: $folderPath,
+    jira: {
+      fields: {
+        summary: $summary,
+        description: $description,
+        labels: $labels,
+        project: { key: $projectKey }
+      }
+    }
   ) {
     test {
       issueId
+      testType { name }
       jira(fields: ["key", "summary"])
     }
+    warnings
   }
 }
 ```
@@ -131,30 +187,133 @@ mutation CreateTest(
 ### Add Test Step
 
 ```graphql
-mutation AddTestStep(
-  $testIssueId: String!
-  $action: String!
-  $data: String
-  $result: String
-) {
-  addTestStep(
-    testIssueId: $testIssueId
-    step: { action: $action, data: $data, result: $result }
-  ) {
-    addedStep { id action data result }
+mutation AddTestStep($issueId: String!, $step: CreateStepInput!) {
+  addTestStep(issueId: $issueId, step: $step) {
+    id
+    action
+    data
+    result
   }
+}
+```
+
+### Update Test Step
+
+Backs `bun xray test update-step <test> --step <stepId>` — partial update, only
+the fields present in the input change.
+
+```graphql
+mutation UpdateTestStep($stepId: String!, $step: UpdateStepInput!) {
+  updateTestStep(stepId: $stepId, step: $step) {
+    id
+    action
+    data
+    result
+  }
+}
+```
+
+### Delete Test Step
+
+Backs `bun xray test remove-step --test <id> --step <stepId>`.
+
+```graphql
+mutation DeleteTestStep($issueId: String!, $stepId: String!) {
+  deleteTestStep(issueId: $issueId, stepId: $stepId)
 }
 ```
 
 ### Update Test Type
 
+The type is an `UpdateTestTypeInput!` object (`{ name: "Cucumber" }`), not a
+bare id string:
+
 ```graphql
-mutation UpdateTestType($issueId: String!, $testTypeId: String!) {
-  updateTestType(issueId: $issueId, testType: { id: $testTypeId }) {
-    test {
-      issueId
-      testType { name }
+mutation UpdateTestType($issueId: String!, $testType: UpdateTestTypeInput!) {
+  updateTestType(issueId: $issueId, testType: $testType) {
+    issueId
+    testType {
+      name
+      kind
     }
+  }
+}
+```
+
+### Preconditions
+
+These mutations have dedicated CLI commands (`bun xray precondition create` /
+`add-to-test` / `update` / `remove-from-test`; reads via `precondition list` /
+`get`) — no need to drop to raw GraphQL. The type input is
+`UpdatePreconditionTypeInput!` (e.g. `{ name: "Manual" }`) and the project key
+travels inside `jira.fields.project`:
+
+```graphql
+mutation CreatePrecondition(
+  $preconditionType: UpdatePreconditionTypeInput!,
+  $definition: String,
+  $projectKey: String!,
+  $summary: String!,
+  $description: String,
+  $labels: [String],
+  $folderPath: String
+) {
+  createPrecondition(
+    preconditionType: $preconditionType,
+    definition: $definition,
+    folderPath: $folderPath,
+    jira: {
+      fields: {
+        summary: $summary,
+        description: $description,
+        labels: $labels,
+        project: { key: $projectKey }
+      }
+    }
+  ) {
+    precondition {
+      issueId
+      preconditionType { name }
+      jira(fields: ["key", "summary"])
+    }
+    warnings
+  }
+}
+
+mutation AddPreconditionsToTest($issueId: String!, $preconditionIssueIds: [String]!) {
+  addPreconditionsToTest(issueId: $issueId, preconditionIssueIds: $preconditionIssueIds) {
+    addedPreconditions
+    warning
+  }
+}
+
+mutation RemovePreconditionsFromTest($issueId: String!, $preconditionIssueIds: [String]!) {
+  removePreconditionsFromTest(issueId: $issueId, preconditionIssueIds: $preconditionIssueIds)
+}
+
+mutation UpdatePrecondition($issueId: String!, $data: UpdatePreconditionInput!) {
+  updatePrecondition(issueId: $issueId, data: $data) {
+    issueId
+    definition
+  }
+}
+```
+
+### Add Test Environments To Test Execution
+
+Backs `bun xray exec create --environment <e>` and `bun xray exec set-environment`.
+Pinning an execution to a Test Environment makes results congruent and comparable
+across environments (e.g. a `staging` run is never blindly compared with a `production`
+run).
+
+```graphql
+mutation AddTestEnvironmentsToTestExecution(
+  $issueId: String!
+  $testEnvironments: [String]!
+) {
+  addTestEnvironmentsToTestExecution(issueId: $issueId, testEnvironments: $testEnvironments) {
+    associatedTestEnvironments
+    warning
   }
 }
 ```
@@ -176,10 +335,12 @@ mutation CreateTestExecution(
   $projectKey: String!
   $summary: String!
   $testIssueIds: [String]
+  $testEnvironments: [String]
 ) {
   createTestExecution(
     projectKey: $projectKey
     testIssueIds: $testIssueIds
+    testEnvironments: $testEnvironments
     jira: { fields: { summary: $summary } }
   ) {
     testExecution {
@@ -187,6 +348,29 @@ mutation CreateTestExecution(
       jira(fields: ["key", "summary"])
     }
   }
+}
+```
+
+> `testEnvironments` is supplied by `bun xray exec create --environment <e>` (repeatable
+> or comma-separated). For an existing execution use `bun xray exec set-environment`
+> (backed by `addTestEnvironmentsToTestExecution`, below).
+
+### Test Plan ↔ Test Execution Association
+
+Backs `bun xray plan add-executions <plan> --executions <keys>`. This is the
+Xray-internal Plan↔Execution association (the Execution shows up under the
+Plan's board) — distinct from any Jira issue link.
+
+```graphql
+mutation AddTestExecutionsToTestPlan($issueId: String!, $testExecIssueIds: [String]!) {
+  addTestExecutionsToTestPlan(issueId: $issueId, testExecIssueIds: $testExecIssueIds) {
+    addedTestExecutions
+    warning
+  }
+}
+
+mutation RemoveTestExecutionsFromTestPlan($issueId: String!, $testExecIssueIds: [String]!) {
+  removeTestExecutionsFromTestPlan(issueId: $issueId, testExecIssueIds: $testExecIssueIds)
 }
 ```
 
@@ -287,6 +471,25 @@ mutation RemoveEvidenceFromTestRun(
 
 For the REST path, the `evidence` array is part of each test object inside the JSON body and uses the same `{ data, filename, contentType }` triplet (note: `contentType` instead of `mimeType` in the REST schema).
 
+## Verified API limits (schema introspection, 2026-08)
+
+Two hard boundaries of the Xray Cloud GraphQL schema, verified by introspection —
+do not go looking for mutations that do not exist:
+
+- **No coverage mutation.** Requirement coverage ("this Story is covered") is not
+  an Xray GraphQL concept at write time — it is the **Jira issue link** whose
+  inward description is `is tested by` (link-type slug `test` in
+  `.agents/jira-required.yaml`). Write it via `bun xray link create <FROM> <TO>
+  --type test` (Jira REST `POST /rest/api/3/issueLink`), never via GraphQL.
+  GraphQL only *reads* coverage (`coverableIssues` on a Test).
+- **Datasets/parametrization are READ-only.** The schema exposes `getDataset` /
+  `getDatasets` queries and **zero** dataset mutations, so parameter values and
+  shared Parameter Lists cannot be created or edited by any API client — they
+  are UI-managed. Parametrizing Manual tests is therefore a **documented
+  convention** (Gherkin `Scenario Outline` + `Examples` via `--gherkin`, or
+  Manual step `data` fields), not a CLI feature. See "Parametrized Tests" in
+  SKILL.md.
+
 ## Test Types
 
 | Type | ID | Use Case |
@@ -336,14 +539,14 @@ The Xray CLI wraps these APIs in `cli/xray/lib/graphql.ts`:
 // Authenticate and get valid token
 const token = await getValidToken();
 
-// Execute GraphQL query
-const result = await graphql<ResponseType>(QUERIES.getTest, { issueId });
+// Execute GraphQL query (single test = getTests with a key JQL, limit 1)
+const result = await graphql<ResponseType>(QUERIES.getTest, { jql: `key = ${key}` });
 
-// Execute GraphQL mutation
+// Execute GraphQL mutation (test type is an UpdateTestTypeInput object)
 const result = await graphql<ResponseType>(MUTATIONS.createTest, {
   projectKey,
   summary,
-  testTypeId: 'Manual'
+  testType: { name: 'Manual' },
 });
 ```
 
