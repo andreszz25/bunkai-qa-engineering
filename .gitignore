@@ -138,3 +138,9 @@ dbhub.local.toml
 # ===== Synced from boilerplate v7.0 =====
 # ----- 2026-06-02 (sync) -----
 **/evidence/
+
+# ===== Cross-harness generated artifacts =====
+# Generated alias onto .agents/skills. Never edit or commit it.
+.claude/skills
+# Local recovery copy written by the cross-harness migration.
+.template/pre-agents-migration/

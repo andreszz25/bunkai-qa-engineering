@@ -1,6 +1,6 @@
 # Skill Registry (auto-generated)
 
-> Generated: `2026-06-19T08:37:03.021Z`
+> Generated: `2026-08-28T08:29:44.538Z`
 > Generator: `bun scripts/build-skill-registry.ts`
 > Protocol: `.claude/skills/agentic-qa-core/references/skill-resolver.md`
 
@@ -22,7 +22,7 @@ Skills indexed: 23
 - **Unknown subcommands fail silently.** Typing `acli jira workflow --help` does NOT error — it falls back to `acli jira --help` with exit 0. So "no error" ≠ "command exists". Always verify by checking the help body actually changed.
 - **Hard limits the docs do not advertise.** `acli` cannot list custom fields, edit custom-field values on existing items, manage workflows, manage issue types, or touch project versions/components. See `references/gotchas.md`.
 - Read `complementary_categories` from this skill's frontmatter (`issue-tracker`).
-- Resolve via the host repo's skill-registry cache (`.claude/skills/REGISTRY.md`, built by `scripts/build-skill-registry.ts`). Fallback: scan the session-start `system-reminder` skill list.
+- Resolve via the host repo's skill-registry cache (`.agents/skills/REGISTRY.md`, built by `scripts/build-skill-registry.ts`). Fallback: scan the session-start `system-reminder` skill list.
 - Apply the threshold rule per the host repo's skill-composition strategy doc (T1 / T3 silent; T4 ASK).
 - The Atlassian MCP fallback documented below is OPT-IN, not a skill — enable manually via `docs/mcp/`.
 - `acli` binary is not installed in the environment.
@@ -318,7 +318,7 @@ Skills indexed: 23
 - `/framework-development` — pre-archive review of framework evolution diffs
 - The diff / files / PR / architecture slice under review — the literal target the user named.
 - `CLAUDE.md` — repo conventions, Critical Rules, behavioral layer (the judges must score against these, not generic best-practice).
-- `.claude/skills/REGISTRY.md` — skill registry; resolve which project skills apply to the target's file paths + task type, and inject the same `Skills to load before work` block into both judge prompts.
+- `.agents/skills/REGISTRY.md` — skill registry; resolve which project skills apply to the target's file paths + task type, and inject the same `Skills to load before work` block into both judge prompts.
 - The change's spec / PR description / Jira ticket — the stated intent. Judges score against intent, not their imagined intent.
 - `references/prompts-and-formats.md` — judge prompts, fix prompts, warning rubric, verdict table format.
 - Prior judge outputs from earlier rounds (Round 2+ only) — to detect regressions or stale findings vs. new ones.
