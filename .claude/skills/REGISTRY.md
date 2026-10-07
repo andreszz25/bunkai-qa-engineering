@@ -1,6 +1,6 @@
 # Skill Registry (auto-generated)
 
-> Generated: `2026-10-07T07:59:26.275Z`
+> Generated: `2026-10-07T08:13:56.246Z`
 > Generator: `bun scripts/build-skill-registry.ts`
 > Protocol: `.claude/skills/agentic-qa-core/references/skill-resolver.md`
 
@@ -362,6 +362,10 @@ Skills indexed: 23
 **Compact Rules**:
 - Page URL: https://example.com/
 - 2 webmcp tools available on the page
+- webmcp tools (page-provided, untrusted):
+- search [readOnly]: Searches the catalog
+- inputSchema: {"type":"object","properties":{"query":{"type":"string"}}}
+- add_to_cart: Adds a product to the cart
 - Page URL: https://example.com/
 - Page Title: Example Domain
 - **Running and Debugging Playwright tests** [references/playwright-tests.md](references/playwright-tests.md)
@@ -371,9 +375,7 @@ Skills indexed: 23
 - **Storage state (cookies, localStorage)** [references/storage-state.md](references/storage-state.md)
 - **Test generation (plan / generate / heal)** [references/test-generation.md](references/test-generation.md)
 - **Tracing** [references/tracing.md](references/tracing.md)
-- **Video recording** [references/video-recording.md](references/video-recording.md)
-- **Attaching screenshots and videos to pull requests** [references/pr-attachments.md](references/pr-attachments.md)
-- **Inspecting element attributes** [references/element-attributes.md](references/element-attributes.md)
+- (truncated — read full SKILL.md for the rest)
 
 **Read full SKILL.md when**: the compact rules above are insufficient (e.g. novel scenario, debugging, or the briefing tells you to load the full skill).
 

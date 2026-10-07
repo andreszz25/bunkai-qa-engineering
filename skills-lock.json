@@ -53,13 +53,13 @@
       "source": "microsoft/playwright-cli",
       "sourceType": "github",
       "skillPath": "skills/playwright-cli/SKILL.md",
-      "computedHash": "9fb3a1b16a431aa5e27ef05dda32e39215c8a8553b7093cdc737367d4a0c61f0"
+      "computedHash": "ffbd59a973d4e2c19c6ecc31254a14497069c362f1d1820b6a6cfbe62de34a73"
     },
     "resend-cli": {
       "source": "resend/resend-skills",
       "sourceType": "github",
       "skillPath": "skills/resend-cli/SKILL.md",
-      "computedHash": "5117b68f494652f61f2ad40a429a6f26ba6808c327854d48477a6d4847247028"
+      "computedHash": "0009e99573153f6a8804437e5edb6eb7c4475dc09450c94d6e1ca0b7de391499"
     }
   }
 }
