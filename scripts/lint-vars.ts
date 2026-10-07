@@ -81,6 +81,16 @@ const SKIP_DIRS = new Set([
   '.agents', // never lint our own source-of-truth
 ]);
 
+// Community skills (tracked in skills-lock.json) ship third-party docs whose
+// {{PLACEHOLDERS}} are not project variables — skip their install dirs.
+const SKILLS_LOCK_JSON = join(REPO_ROOT, 'skills-lock.json');
+const COMMUNITY_SKILL_DIRS = new Set(
+  existsSync(SKILLS_LOCK_JSON)
+    ? Object.keys(JSON.parse(readFileSync(SKILLS_LOCK_JSON, 'utf8')).skills ?? {})
+        .map(name => join(REPO_ROOT, '.claude', 'skills', name))
+    : [],
+);
+
 // Allowlist: identifiers that look like variables but are documentation strings
 // describing the syntax itself. Each entry is [variableName, fileSubstring] —
 // the linter ignores matches where both conditions hold.
@@ -461,7 +471,7 @@ function walkMarkdown(root: string, files: string[]): void {
     if (stat.isSymbolicLink()) { continue; }
 
     if (stat.isDirectory()) {
-      if (SKIP_DIRS.has(name)) { continue; }
+      if (SKIP_DIRS.has(name) || COMMUNITY_SKILL_DIRS.has(full)) { continue; }
       walkMarkdown(full, files);
     }
     else if (stat.isFile() && name.endsWith('.md')) {
