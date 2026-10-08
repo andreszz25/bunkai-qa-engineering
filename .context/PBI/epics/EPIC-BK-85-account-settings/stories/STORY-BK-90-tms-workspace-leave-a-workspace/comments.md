@@ -6,7 +6,7 @@
 
 ### Andrés Daniel Cumare Morales - 6/10/2026, 9:40:00 AM
 
-=== Shift-Left Refinement: BK-90 ===
+=== Shift-Left Refinement: [https://jira.upexgalaxy.com/browse/BK-90#icft=BK-90](https://jira.upexgalaxy.com/browse/BK-90#icft=BK-90) ===
 
 ## Summary
 
@@ -23,7 +23,7 @@ Scenario 2 only describes the SOLE-owner block. It does not say whether the gate
 
 ## Open questions blocking full estimation
 
-1. ***Can a workspace have more than one ****`role = 'owner'`**** member, and if so, can any of them leave freely as long as one owner remains?*** Blocks New Scenario C.
+1. ***Can a workspace have more than one**** `role = 'owner'` ****member, and if so, can any of them leave freely as long as one owner remains?*** Blocks New Scenario C.
 2. ***What happens when a user leaves their only workspace*** — blocked, or routed to onboarding? Blocks New Scenario A.
 3. ***(Dev)*** Should workspace-scoped PATs be auto-revoked when the user leaves the workspace they're scoped to?
 
@@ -35,7 +35,7 @@ Refined on: 2026-06-10 — QA Shift-Left session
 
 ### Andrés Daniel Cumare Morales - 6/10/2026, 9:48:18 AM
 
-=== Shift-Left Follow-up: PO / Dev / Design Responses to Open Questions (BK-90) ===
+=== Shift-Left Follow-up: PO / Dev / Design Responses to Open Questions ([https://jira.upexgalaxy.com/browse/BK-90#icft=BK-90](https://jira.upexgalaxy.com/browse/BK-90#icft=BK-90)) ===
 
 > ***Practice-exercise disclaimer****: This QA engineering practice exercise uses AI to role-play the PO, Dev, and Design perspectives so the shift-left loop can be demonstrated end-to-end. The responses below are AI-authored recommendations grounded in the existing schema, flows, and product docs (`business-data-map.md`, `business-model.md`) — they are ****not*** real confirmations from the actual PO, Dev, or Design stakeholders. Treat them as a confident starting proposal to validate or override before this Story leaves Estimation.
 
@@ -47,7 +47,7 @@ Refined on: 2026-06-10 — QA Shift-Left session
 
 ### Q1 — Multi-owner gate: can a workspace have >1 owner, and can any of them leave freely?
 
-***Decision******:****** YES — the gate is count-based ("are you the LAST remaining owner"), not identity-based ("are you AN owner").***
+***Decision:**** ****YES — the gate is count-based ("are you the LAST remaining owner"), not identity-based ("are you AN owner").***
 
 - The schema does not prevent multiple `workspace*members` rows with `role = 'owner'` for the same workspace — `bunkai*is*workspace*owner(ws*id)` checks `status = 'active' AND role = 'owner'`, a row-level role check, not a comparison against `workspaces.owner*user_id`.
 - "Leave workspace" should be available to ANY member with `role = 'owner'` as long as at least one OTHER `role = 'owner', status = 'active'` row remains for that workspace after the leave.
@@ -57,7 +57,7 @@ Refined on: 2026-06-10 — QA Shift-Left session
 
 ### Q2 — What happens when a user leaves their only workspace?
 
-***Decision******:****** Route to ****`/onboarding`**** — do NOT block.***
+***Decision:**** ****Route to**** `/onboarding` ****— do NOT block.***
 
 - This is the existing, already-handled state per Flow 2 (`business-data-map.md` §3): "no active memberships → redirect to `/onboarding`" is exactly what a brand-new user without any workspace experiences today.
 - Reusing this flow means ***zero new UI and zero new business rule*** — lower effort, and it avoids inventing a second "you can't leave" gate alongside the sole-owner gate (which would make the two gates easy to confuse in testing and in the UI copy).
@@ -71,7 +71,7 @@ Refined on: 2026-06-10 — QA Shift-Left session
 
 ### Should workspace-scoped PATs be auto-revoked when the user leaves that workspace?
 
-***Decision******:****** YES — auto-revoke as part of the same transaction.***
+***Decision:**** ****YES — auto-revoke as part of the same transaction.***
 
 - `access*tokens` already has a `revoked*at` soft-delete column and a documented lifecycle (`active → revoked` via `UPDATE SET revoked_at = now()`, no hard delete — `business-data-map.md` §4.3). This is an existing, well-understood mechanism — no new state or column needed.
 - Implementation: the "leave workspace" RPC/Server Action should, in the same transaction that deletes the caller's `workspace*members` row, run `UPDATE access*tokens SET revoked*at = now() WHERE user*id = auth.uid() AND workspace*id = <left*ws*id> AND revoked*at IS NULL` — mirroring the atomic, single-transaction pattern already used by `bunkai*bootstrap*workspace` (migration `0006`).
@@ -82,11 +82,11 @@ Refined on: 2026-06-10 — QA Shift-Left session
 
 ## Responding as Design
 
-**(role-played for this exercise — answering Gap #2****:**** confirmation-dialog UX, "names the workspace explicitly" vs. type-to-confirm)**
+**(role-played for this exercise — answering Gap #2:** **confirmation-dialog UX, "names the workspace explicitly" vs. type-to-confirm)**
 
 ### Should "Leave workspace" require type-to-confirm, or a simple confirm/cancel dialog?
 
-***Decision******:****** Simple confirm/cancel dialog naming the workspace — no type-to-confirm.***
+***Decision:**** ****Simple confirm/cancel dialog naming the workspace — no type-to-confirm.***
 
 - Type-to-confirm is the right pattern for the HIGHEST-blast-radius destructive actions — ones that are irreversible AND affect data shared with others (e.g., deleting an entire workspace, or a project with all its ATCs/stories).
 - "Leave workspace" is self-scoped: only the leaving user's own `workspace_members` row is affected, the workspace's data is fully intact (per New Scenario B), and the action is reversible via re-invite (per BK-90's own EC-4). The blast radius is "this user loses access to one workspace," not "this workspace's data is gone."
@@ -101,6 +101,120 @@ Refined on: 2026-06-10 — QA Shift-Left session
 With the above, all 3 ***NEEDS PO/DEV CONFIRMATION*** scenarios in the `acceptance*criteria` field (New Scenarios A, B, C) are CONFIRMED as written, with one addition recommended for New Scenario B: split out a PAT-revocation assertion as its own clause (or its own scenario) per the Dev answer above. Recommend the team review this comment and, if these recommendations are accepted, ask QA to update `acceptance*criteria` to remove the "NEEDS PO/DEV CONFIRMATION" flags and add the PAT-revocation clause before this Story leaves Estimation.
 
 — Posted as part of a QA shift-left practice exercise, 2026-06-10
+
+---
+
+### Ely - 7/30/2026, 4:28:59 PM
+
+Mockup — Settings — Workspaces (leave flow + sole-owner guard). Source: .context/designs/bunkai-test-management-tool/bk-85-account-settings/settings-workspaces.html · spec: master-design-plan §4.10
+
+
+
+---
+
+### Ely - 7/31/2026, 4:07:35 PM
+
+## Open questions ratified before Stage 1 planning (2026-07-31)
+
+The 3 shift-left questions (role-played PO/Dev/Design answers from 2026-06-10, explicitly disclaimed as practice-exercise recommendations, never formally accepted) were confirmed by the product owner before implementation:
+
+1. ***Multi-owner gate****: count-based ("are you the LAST remaining owner"), not identity-based. Any member with `role='owner'` can leave as long as at least one other active owner remains. No ownership-transfer sub-flow in this story's scope. ****New Scenario C confirmed as written.***
+2. ***Leaving your only workspace****: routes to `/onboarding` (reuses the existing no-workspace flow), does not block. ****New Scenario A confirmed as written.***
+3. ***Workspace-scoped PATs on leave***: auto-revoked in the same transaction as the membership delete (`UPDATE access*tokens SET revoked*at = now() WHERE user*id = auth.uid() AND workspace*id = <left*ws*id> AND revoked_at IS NULL`). Split out as its own assertion, distinct from New Scenario B's "no cascade on authored content" guarantee.
+
+All 3 `NEEDS PO/DEV CONFIRMATION` flags in `acceptance_criteria` are now resolved. Proceeding to implementation.
+
+---
+
+### Ely - 7/31/2026, 4:11:15 PM
+
+## Correction to the previous comment — mockup takes precedence (2026-07-31)
+
+The shipped mockup (`settings-workspaces.html`, delivered 2026-07-30 — more recent than the 2026-06-10 role-played comment) directly contradicts 2 of the answers just posted:
+
+1. ***Leaving your only workspace****: the mockup's `state:single-workspace` reference panel explicitly says **"The Leave action doesn't render — leaving your only workspace would strand the account."** This is a ****block**** (hide the action entirely), not a redirect to `/onboarding`. Per Critical Rule #15 (the mockup is the design contract; the more recent, shipped artifact outranks an earlier, explicitly-disclaimed practice-exercise comment), ****following the mockup: block, not redirect.*** New Scenario A is superseded by this — leaving is simply not offered when it's the user's only membership.
+2. ***Confirmation UX****: the mockup uses a ****type-to-confirm*** pattern (the user must type the exact workspace name to enable the "Leave" button), not the simple confirm/cancel dialog the role-played "Design" answer recommended. Following the mockup: type-to-confirm, matching its tested implementation exactly.
+
+The multi-owner gate (count-based) and PAT auto-revoke decisions from the previous comment stand unchanged — the mockup doesn't address either (no co-owner state or PAT-cascade behavior is depicted).
+
+Net effect: implementation follows the shipped mockup wherever it speaks, and the earlier role-played comment only where the mockup is silent.
+
+---
+
+### Automation for Jira - 7/31/2026, 4:57:40 PM
+
+🔎 Pull Request created. Task is pending to ANALYZE and REVIEW by the team. Waiting for PR Approval.
+
+---
+
+### Automation for Jira - 7/31/2026, 5:01:37 PM
+
+✅ Pull Request is successfully MERGED. Task is Done.
+
+---
+
+### Ely - 7/31/2026, 5:45:37 PM
+
+## Ready For QA — dev complete
+
+Both PRs merged to `staging`:
+
+- PR1 (backend: `bunkai*leave*workspace` RPC + `DELETE /api/v1/workspaces/{id}/membership`): [https://github.com/upex-galaxy/upex-bunkai-tms/pull/72](https://github.com/upex-galaxy/upex-bunkai-tms/pull/72)
+- PR2 (frontend: type-to-confirm leave modal + list wiring): [https://github.com/upex-galaxy/upex-bunkai-tms/pull/74](https://github.com/upex-galaxy/upex-bunkai-tms/pull/74)
+
+All 5 AC scenarios implemented and covered (Spec Compliance Matrix + full review trail in the repo at `.context/PBI/epics/EPIC-BK-85-account-settings/stories/STORY-BK-90-tms-workspace-leave-a-workspace/review.md`).
+
+Note for QA walkthrough: 2 of the story's shift-left-flagged decisions came out differently than the original 2026-06-10 draft comment — see the two 2026-07-31 comments on this ticket for the ratified, mockup-aligned behavior:
+
+- Leaving your ***only**** workspace is ****blocked*** (the action doesn't render at all), not redirected to `/onboarding` as the stored `acceptance_criteria` field text still says.
+- The confirmation dialog uses ***type-to-confirm*** (type the exact workspace name), not a simple confirm/cancel.
+
+Recommend updating the `acceptance_criteria` field to match before authoring the final ATP, so the drift doesn't propagate into test cases.
+
+Reassigned to you as the shift-left QA owner for this story.
+
+---
+
+### Andrés Daniel Cumare Morales - 8/5/2026, 9:33:41 AM
+
+## Acceptance Criteria + ATP reconciled and synced (2026-08-05)
+
+Reconciled `acceptance*criteria` and `acceptance*test_plan` (ATP DRAFT), merging: the 2026-06-10 shift-left baseline, the 2026-07-31 PO/Dev ratification, and the 2026-07-31 mockup correction (`settings-workspaces.png`, attachment 10199).
+
+### Changes
+
+- ***New Scenario A**** (leaving the only workspace) — corrected from "route to `/onboarding`" to a ****block***, matching the mockup's "state:single-workspace" panel, which explicitly says the Leave action does not render for a user's only workspace.
+- ***New Scenario B / New Scenario C*** — confirmed as ratified, unaffected by the mockup; "NEEDS CONFIRMATION" flags removed.
+- PAT auto-revocation folded into Scenario B as an explicit clause.
+
+### Open question — still unresolved, needs a real answer
+
+Confirm-dialog mechanism for "Leave workspace" — simple confirm/cancel naming the workspace, or type-to-confirm? No design-authoritative answer exists yet (the only prior answer was role-played, not ratified). Please confirm before Stage 1 test planning parametrizes Scenario 1's interaction details.
+
+### Also fixed
+
+`.agents/jira-fields.json` had a stale field ID for `acceptance*criteria` (`customfield*10063`, which now resolves to the unrelated "Time to resolution" SLA field) — corrected to `customfield_10097`. This is why the AC field looked empty in earlier tooling checks; it wasn't, the catalog pointed at the wrong field.
+
+---
+
+### Andrés Daniel Cumare Morales - 10/8/2026, 9:22:40 AM
+
+@@Ely — QA test-data setup note on ***New Scenario C (co-owner can leave)***. Parking it for now; please take a look when you can.
+
+> ***WARNING:**** ****Scenario C is currently not reachable through the product.*** There is no supported way to create a second active owner in a workspace on staging.
+
+| Surface | Finding |
+| --- | --- |
+| UI | Settings > ***Members*** is marked "soon". The Leave dialog itself says "Ownership transfer isn't available yet." |
+| API | No endpoint to change a member's role. `POST /api/v1/workspaces/{id}/invites` only accepts `viewer`, `member`, `admin`. |
+| DB | RLS policy `workspace*members*update_admin` would let an owner/admin update `role` directly via Supabase, but that bypasses the app, so QA is not using it. |
+
+***Questions******:***
+
+1. How is a co-owner expected to exist today — is there a planned path (Members page, invite with `owner`, ownership transfer)?
+2. Should Scenario C stay in scope for BK-90 (seeded via DB / Supabase dashboard for testing), or move to the story that delivers member role management?
+
+Scenario C stays ***pending*** in the ATP until this is clarified. Scenarios 1, 2, A and B are proceeding with seeded personas.
 
 ---
 
